@@ -62,48 +62,66 @@ Full conversation so far:
 Respond to Costa's most recent message."""
 
 
-DIALOGUE_OPENING_PROMPT = """You are starting a live dialogue with another AI agent ({other_agent}).
-Costa (the human leading the room) just sent the question below. {other_agent} is in
-the room with you and will respond to your turn, then you'll respond to theirs.
+DIALOGUE_OPENING_PROMPT = """You're opening a working session with {other_agent} — your
+colleague from a different AI lab — to help Costa land a good answer to the question below.
 
-This is turn 1. Keep your response UNDER {turn_words} WORDS — short, sharp, conversational.
-This is dialogue, not an essay. End with either:
-  (a) a concrete position {other_agent} can react to, OR
-  (b) a sharp question that focuses the next turn.
+This isn't a debate or a peer-review. You and {other_agent} are on the same team. Your
+different training data and reasoning patterns are *useful* — between the two of you,
+you'll catch things either of you alone would miss. The goal is to think harder together
+than either of you could alone, and end up with an answer Costa can act on.
 
-The goal is to think TOGETHER over many short turns, not write a long essay alone.
-Whatever you say, {other_agent} will see it and react. Then you'll see their reaction.
-Build incrementally toward a shared answer.
+You're going first. Open the session by doing one of these:
+  - Take a clear initial position so {other_agent} has something concrete to push on
+  - Frame the question more precisely if Costa's wording leaves real ambiguity
+  - Name what you think matters most about this question, and why
+  - Surface what you're genuinely uncertain about and want {other_agent}'s read on
 
-If at some later turn you both clearly agree and there is nothing material left to add,
-either of you can write `# CONVERGED` followed by a one-line summary of the shared
-conclusion. The room will then close the iteration.
+End your turn by giving {other_agent} something to engage with — a position to refine,
+a question to weigh in on, or an explicit handoff ("{other_agent}, what's your read on X?").
 
-Full conversation so far:
+Be ~{turn_words} words. Conversational, not formal. Don't try to close the question on
+turn 1 — open it. You and {other_agent} will trade turns until you've genuinely landed
+somewhere together.
+
+Costa's question and the conversation so far:
 {full_transcript}
 
-Respond to Costa's most recent message. Under {turn_words} words. Be concrete."""
+Open the session."""
 
 
-DIALOGUE_TURN_PROMPT = """You are in turn {turn_n} of a live dialogue with {other_agent}.
-{other_agent} just took their turn (visible at the end of the transcript). React to what
-they JUST said — quote or paraphrase the specific claim or question you're responding to.
+DIALOGUE_TURN_PROMPT = """You're in a working session with {other_agent} — your colleague
+from a different AI lab — helping Costa land a good answer. This is turn {turn_n} of up
+to {max_turns}. {other_agent} just spoke (their turn is at the bottom of the transcript).
 
-Your turn must do exactly one of:
-  - **Build:** extend their point with new evidence, examples, or a sharper formulation
-  - **Push back:** identify a specific weak claim, missed risk, or factual error
-  - **Sharpen:** restate the core question more precisely; isolate where you disagree
-  - **Converge:** if you genuinely agree and there is no material gap left, write
-    `# CONVERGED` on its own line, then a one-line summary of the shared conclusion.
-    Only converge with evidence — not as politeness.
+You're teammates, not opponents. The frame here is *think together*, not *grade each
+other*. Respond to what {other_agent} just said the way a good colleague would — engage
+specifically with their reasoning, address them by name, and move the conversation toward
+a real answer.
 
-Keep your response UNDER {turn_words} WORDS. This is dialogue, not an essay. React directly
-to {other_agent}'s last turn — do not summarize the whole conversation.
+Natural moves your turn can take (mix as needed, you don't have to pick just one):
 
-Full transcript so far:
+  - **Build on it:** "{other_agent}, that frames it well — one thing I'd add..."
+  - **Refine:** "{other_agent} — yes, but the case you're describing only holds when X..."
+  - **Defer:** "{other_agent}, you're closer to this than I am — what do you think
+    about Y given what you just said?"
+  - **Update:** "Hmm, {other_agent}, you're right that I missed Z. That changes my read on..."
+  - **Raise something they didn't see:** "{other_agent}, one angle I think we should
+    consider before we land this..."
+  - **Land it:** if you've actually arrived together, write a short closing line
+    addressed to Costa: "Costa, here's where we landed: [the answer]." That ends the
+    session.
+
+Don't perform disagreement to look thorough. If {other_agent} got it right, say so and
+help refine. If they missed something material, raise it as a teammate would, not as a
+debater. Address {other_agent} by name when you respond to a specific thing they said.
+
+Be ~{turn_words} words. Conversational. You're not writing for an audience — you're
+talking to {other_agent} and to Costa.
+
+The session so far:
 {full_transcript}
 
-Your turn ({turn_n} of {max_turns}). Under {turn_words} words."""
+Your turn (#{turn_n}). Talk to {other_agent}."""
 
 
 R2_PROMPT = """You are participating in a team room with another AI agent ({other_agent}).
@@ -379,11 +397,25 @@ async def run_agent(
 # ---------- Round orchestration ----------
 
 
-CONVERGENCE_RE = re.compile(r"^\s*#\s*CONVERGED\b", re.MULTILINE | re.IGNORECASE)
+# The session closes when an agent signals it explicitly. Two patterns are
+# recognized:
+#   1. "Costa, here's where we landed:" — the natural conversational close
+#      that the new collaborative-framed prompts ask for. Tolerant of common
+#      variants ("Costa — here's...", "Costa: here is where we landed:") and
+#      apostrophe direction.
+#   2. "# CONVERGED" — the legacy marker. Kept for back-compat with older
+#      iterations and as a hard-stop the agents can fall back to.
+CONVERGENCE_RE = re.compile(
+    r"(^\s*#\s*CONVERGED\b)"
+    r"|(\bCosta[\s,—:-]+here(?:'?s|\s+is)?\s+where\s+we\s+landed\b)",
+    re.MULTILINE | re.IGNORECASE,
+)
 
 
 def _has_converged(content: str) -> bool:
-    """True if an agent's response declares convergence per the spec."""
+    """True if an agent's response signals the session has landed —
+    either by addressing Costa with a wrap-up line, or by writing the
+    legacy `# CONVERGED` marker."""
     return bool(CONVERGENCE_RE.search(content or ""))
 
 
