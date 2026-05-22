@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Vigil — Team Room</title>
+<style>
+  :root {
+    --bg: #0b0d10;
+    --panel: #14171c;
+    --border: #21262d;
+    --text: #e6edf3;
+    --muted: #7d8590;
+    --claude: #d09a73;
+    --codex: #6cbf6c;
+    --costa: #79c0ff;
+    --system: #9d8cd5;
+  }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font: 14px/1.5 -apple-system, BlinkMacSystemFont, "SF Mono", Menlo, monospace; }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--border); display: flex; align-items: baseline; gap: 16px; position: sticky; top: 0; background: var(--bg); z-index: 10; }
+  header h1 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; color: var(--muted); }
+  header .topic { color: var(--text); font-weight: 600; }
+  header .count { margin-left: auto; color: var(--muted); font-size: 12px; }
+  main { max-width: 900px; margin: 0 auto; padding: 24px; }
+  .msg { background: var(--panel); border: 1px solid var(--border); border-left-width: 3px; border-radius: 6px; padding: 12px 16px; margin-bottom: 12px; }
+  .msg.role-claude { border-left-color: var(--claude); }
+  .msg.role-codex  { border-left-color: var(--codex); }
+  .msg.role-costa  { border-left-color: var(--costa); }
+  .msg.role-system { border-left-color: var(--system); }
+  .meta { display: flex; gap: 12px; font-size: 11px; color: var(--muted); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.05em; }
+  .meta .role { font-weight: 600; color: var(--text); }
+  .msg.role-claude .meta .role { color: var(--claude); }
+  .msg.role-codex  .meta .role { color: var(--codex); }
+  .msg.role-costa  .meta .role { color: var(--costa); }
+  .msg.role-system .meta .role { color: var(--system); }
+  pre { margin: 0; white-space: pre-wrap; word-wrap: break-word; font: 13px/1.55 ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace; }
+  .empty { color: var(--muted); padding: 48px 0; text-align: center; }
+  .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--codex); margin-right: 8px; animation: pulse 2s ease-in-out infinite; vertical-align: middle; }
+  @keyframes pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Team Room</h1>
+  <span class="topic" id="topic">—</span>
+  <span class="count"><span class="dot"></span><span id="count-num">0</span> messages</span>
+</header>
+<main id="transcript">
+  <div class="empty" id="empty">Waiting for the first message…</div>
+</main>
+<script>
+  const params = new URLSearchParams(location.search);
+  const topic = params.get('topic') || 'default';
+  document.getElementById('topic').textContent = topic;
+  document.title = 'Team Room · ' + topic;
+
+  let lastLength = 0;
+  let lastCount = 0;
+
+  function formatTime(iso) {
+    try {
+      return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    } catch (e) { return iso; }
+  }
+
+  function renderMessage(msg) {
+    const wrap = document.createElement('div');
+    wrap.className = 'msg role-' + msg.role;
+
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    const roleSpan = document.createElement('span');
+    roleSpan.className = 'role';
+    roleSpan.textContent = msg.role;
+    const modelSpan = document.createElement('span');
+    modelSpan.textContent = msg.model || '';
+    const tsSpan = document.createElement('span');
+    tsSpan.textContent = formatTime(msg.ts);
+    meta.appendChild(roleSpan);
+    meta.appendChild(modelSpan);
+    meta.appendChild(tsSpan);
+
+    const body = document.createElement('pre');
+    body.textContent = msg.content;
+
+    wrap.appendChild(meta);
+    wrap.appendChild(body);
+    return wrap;
+  }
+
+  async function poll() {
+    try {
+      const res = await fetch('./' + topic + '.jsonl?t=' + Date.now(), { cache: 'no-store' });
+      if (!res.ok) return;
+      const text = await res.text();
+      if (text.length === lastLength) return;
+      lastLength = text.length;
+
+      const lines = text.split('\n').filter(Boolean);
+      const transcript = document.getElementById('transcript');
+      while (transcript.firstChild) transcript.removeChild(transcript.firstChild);
+
+      if (lines.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'empty';
+        empty.textContent = 'Waiting for the first message…';
+        transcript.appendChild(empty);
+      } else {
+        for (const line of lines) {
+          try {
+            transcript.appendChild(renderMessage(JSON.parse(line)));
+          } catch (e) { /* skip malformed line */ }
+        }
+      }
+
+      document.getElementById('count-num').textContent = String(lines.length);
+      if (lines.length > lastCount) {
+        window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+      }
+      lastCount = lines.length;
+    } catch (e) { /* network blip, try again */ }
+  }
+
+  setInterval(poll, 1500);
+  poll();
+</script>
+</body>
+</html>

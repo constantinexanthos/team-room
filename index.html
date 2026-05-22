@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Vigil — Team Room</title>
+<style>
+  :root {
+    --bg: #0b0d10;
+    --panel: #14171c;
+    --panel-hover: #1b1f26;
+    --border: #21262d;
+    --text: #e6edf3;
+    --muted: #7d8590;
+    --accent: #79c0ff;
+    --claude: #d09a73;
+    --codex: #6cbf6c;
+    --costa: #79c0ff;
+    --system: #9d8cd5;
+  }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font: 14px/1.5 -apple-system, BlinkMacSystemFont, "SF Mono", Menlo, monospace; }
+  header { padding: 24px 32px; border-bottom: 1px solid var(--border); display: flex; align-items: baseline; gap: 16px; }
+  header h1 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; color: var(--muted); }
+  header .subtitle { color: var(--text); }
+  header .count { margin-left: auto; color: var(--muted); font-size: 12px; }
+  main { max-width: 700px; margin: 0 auto; padding: 32px; }
+  .empty { color: var(--muted); padding: 64px 0; text-align: center; font-size: 13px; }
+  .empty code { background: var(--panel); padding: 2px 8px; border-radius: 4px; color: var(--text); }
+  .topic { display: block; text-decoration: none; color: inherit; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 16px 20px; margin-bottom: 8px; transition: background 0.1s ease; }
+  .topic:hover { background: var(--panel-hover); border-color: var(--muted); }
+  .topic-name { font-size: 14px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+  .topic-meta { display: flex; gap: 12px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; align-items: center; }
+  .role-pill { padding: 2px 8px; border-radius: 10px; font-weight: 600; font-size: 10px; background: rgba(255,255,255,0.04); }
+  .role-pill.role-claude { color: var(--claude); }
+  .role-pill.role-codex  { color: var(--codex); }
+  .role-pill.role-costa  { color: var(--costa); }
+  .role-pill.role-system { color: var(--system); }
+  .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--codex); margin-right: 8px; animation: pulse 2s ease-in-out infinite; vertical-align: middle; }
+  @keyframes pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Team Room</h1>
+  <span class="subtitle">Topics</span>
+  <span class="count"><span class="dot"></span><span id="count">0</span> active</span>
+</header>
+<main id="list">
+  <div class="empty">Loading…</div>
+</main>
+<script>
+  function formatRelative(epochSeconds) {
+    const now = Date.now() / 1000;
+    const delta = now - epochSeconds;
+    if (delta < 60) return Math.floor(delta) + 's ago';
+    if (delta < 3600) return Math.floor(delta / 60) + 'm ago';
+    if (delta < 86400) return Math.floor(delta / 3600) + 'h ago';
+    return Math.floor(delta / 86400) + 'd ago';
+  }
+
+  function formatBytes(n) {
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+    return (n / 1024 / 1024).toFixed(1) + ' MB';
+  }
+
+  function renderTopic(t) {
+    const link = document.createElement('a');
+    link.className = 'topic';
+    link.href = 'viewer.html?topic=' + encodeURIComponent(t.name);
+
+    const nameEl = document.createElement('div');
+    nameEl.className = 'topic-name';
+    nameEl.textContent = t.name;
+
+    const metaEl = document.createElement('div');
+    metaEl.className = 'topic-meta';
+
+    if (t.last_role) {
+      const pill = document.createElement('span');
+      pill.className = 'role-pill role-' + t.last_role;
+      pill.textContent = 'last: ' + t.last_role;
+      metaEl.appendChild(pill);
+    }
+
+    const timeEl = document.createElement('span');
+    timeEl.textContent = formatRelative(t.mtime);
+    metaEl.appendChild(timeEl);
+
+    const sizeEl = document.createElement('span');
+    sizeEl.textContent = formatBytes(t.size);
+    metaEl.appendChild(sizeEl);
+
+    link.appendChild(nameEl);
+    link.appendChild(metaEl);
+    return link;
+  }
+
+  function renderEmpty() {
+    const list = document.getElementById('list');
+    while (list.firstChild) list.removeChild(list.firstChild);
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    const head = document.createElement('div');
+    head.textContent = 'No topics yet.';
+    head.style.marginBottom = '12px';
+    const hint = document.createElement('div');
+    const code = document.createElement('code');
+    code.textContent = './scripts/team-room/ask-codex.sh my-topic "..."';
+    hint.appendChild(document.createTextNode('Start one with '));
+    hint.appendChild(code);
+    empty.appendChild(head);
+    empty.appendChild(hint);
+    list.appendChild(empty);
+  }
+
+  async function poll() {
+    try {
+      const res = await fetch('./topics.json?t=' + Date.now(), { cache: 'no-store' });
+      if (!res.ok) return;
+      const topics = await res.json();
+      document.getElementById('count').textContent = String(topics.length);
+
+      const list = document.getElementById('list');
+      if (topics.length === 0) {
+        renderEmpty();
+        return;
+      }
+      while (list.firstChild) list.removeChild(list.firstChild);
+      for (const t of topics) {
+        list.appendChild(renderTopic(t));
+      }
+    } catch (e) { /* network blip; retry */ }
+  }
+
+  setInterval(poll, 3000);
+  poll();
+</script>
+</body>
+</html>
