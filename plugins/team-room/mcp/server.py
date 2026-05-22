@@ -247,24 +247,24 @@ def emit_progress(progress_token: Any, progress: float, total: float | None, mes
 def _progress_for_dialogue(state: dict) -> tuple[float, float, str]:
     """Map a dialogue-mode state.json snapshot to (progress, total, message).
 
-    Progress is fractional: turn N composing = N - 0.5, turn N done = N.
-    This keeps the counter monotonic across the (start-of-turn, end-of-turn)
-    transitions and surfaces both 'X is composing' and 'X is done, Y up next'.
+    Messages are deliberately tight ("claude · turn 1") so that any client UI
+    rendering them inline stays unobtrusive — the team-room MCP is meant to
+    feel like a function call, not a chat participant.
     """
     turn = state.get("turn") or 0
     max_turns = state.get("max_turns") or 8
-    agent = (state.get("current_agent") or "?").capitalize()
+    agent = (state.get("current_agent") or "?").lower()
     return (max(0.5, float(turn) - 0.5), float(max_turns),
-            f"{agent} composing turn {turn} of {max_turns}")
+            f"{agent} · turn {turn}")
 
 
 def _progress_for_rounds(state: dict) -> tuple[float, float, str]:
     status = state.get("status") or ""
     if status == "round-1":
-        return 0.5, 2.0, "Round 1: both agents writing first-take in parallel"
+        return 0.5, 2.0, "rounds · r1"
     if status == "round-2":
-        return 1.5, 2.0, "Round 2: each agent critiquing the other"
-    return 0.0, 2.0, f"Status: {status}"
+        return 1.5, 2.0, "rounds · r2"
+    return 0.0, 2.0, status or "rounds"
 
 
 def tool_ask(args: dict, _meta: dict | None = None) -> dict:
@@ -372,8 +372,7 @@ def tool_ask(args: dict, _meta: dict | None = None) -> dict:
         time.sleep(poll_interval)
     else:
         if progress_token is not None:
-            emit_progress(progress_token, progress_counter + 1.0, None,
-                          f"timed out after {timeout}s; orchestrator still running")
+            emit_progress(progress_token, progress_counter + 1.0, None, "wait-timeout")
         return {
             "session": {"topic": topic, "prompt_id": prompt_id},
             "status": "timeout",
@@ -387,8 +386,7 @@ def tool_ask(args: dict, _meta: dict | None = None) -> dict:
     final_outcome = final_state_for_progress.get("outcome") or "complete"
     if progress_token is not None:
         progress_counter = max(progress_counter + 1.0, float(final_state_for_progress.get("max_turns") or progress_counter))
-        emit_progress(progress_token, progress_counter, progress_counter,
-                      f"{final_outcome} — brief ready")
+        emit_progress(progress_token, progress_counter, progress_counter, final_outcome)
 
     # Pull messages for this iteration only
     messages = [m for m in read_transcript(topic) if m.get("prompt_id") == prompt_id]
@@ -471,13 +469,26 @@ TOOLS = {
             "together over multiple short turns, then return a structured artifact. "
             "Use when a strategic call would benefit from cross-model dialogue "
             "(architecture choices, prioritization, design trade-offs, naming). "
-            "Every session ends in exactly one legible terminal state: "
-            "`converged` (joint read for you), `forked` (explicit unresolved "
-            "disagreement with view-mapping), `timed-out` (max turns hit with "
-            "partial progress), or `failed`. The response surfaces the "
-            "structured `final_brief` as the primary artifact, with the raw "
-            "`messages` transcript as supporting material. Render the brief "
-            "first; the transcript is for inspection."
+            "Outcomes: `converged` (joint read), `forked` (mapped disagreement), "
+            "`timed-out` (partial), `failed`.\n\n"
+            "RENDERING GUIDANCE — treat this tool like a function call, not a "
+            "chat participant. The user sees the tool-call widget collapsed by "
+            "default and can expand to inspect the full transcript. Your text "
+            "response should be MINIMAL:\n"
+            "  - converged: quote `final_brief.joint_read` directly as the "
+            "    answer. One short lead-in is fine (e.g. \"Team Room's read:\"); "
+            "    no narration of the deliberation, no per-turn summary, no "
+            "    metadata.\n"
+            "  - forked: present `final_brief.fork` concisely (the bullet block "
+            "    is already structured); ask the user how they want to resolve "
+            "    if relevant.\n"
+            "  - timed-out: one line (\"Team Room timed out at turn N — partial "
+            "    available if you want it\"); the partial is in the expanded "
+            "    transcript.\n"
+            "  - failed: one line with the error reason from `final_brief.error`.\n"
+            "Do NOT paste `messages`, `final_brief` metadata, or `session` info "
+            "into your text response. The user expands the tool call if they "
+            "want to see how the team got there."
         ),
         "inputSchema": {
             "type": "object",
@@ -494,11 +505,15 @@ TOOLS = {
     },
     "team_room_status": {
         "description": (
-            "Get current iteration state for a topic. While in-flight, returns "
-            "live status (dialogue/round-1/round-2 + current_agent + turn). "
-            "After completion, returns idle status with `outcome` set and the "
-            "`final_brief` artifact attached. Useful for polling wait=false "
-            "sessions and for retrieving the brief from a previously-run topic."
+            "Get current iteration state for a topic. While in-flight: live "
+            "status (dialogue/round-1/round-2 + current_agent + turn). After "
+            "completion: idle status with `outcome` set and `final_brief` "
+            "attached. Useful for polling wait=false sessions and retrieving "
+            "the brief from a previously-run topic.\n\n"
+            "RENDERING GUIDANCE — same minimal rule as team_room_ask. If "
+            "`final_brief` is present, quote `joint_read` (or `fork`) only; "
+            "don't dump the envelope metadata. If in-flight, a tight status "
+            "line is enough (\"team-room: codex composing turn 3 of 8\")."
         ),
         "inputSchema": {
             "type": "object",
@@ -507,14 +522,21 @@ TOOLS = {
         },
     },
     "team_room_recent": {
-        "description": "List recent topics by last-modified time. Useful to find an existing topic to continue.",
+        "description": (
+            "List recent topics by last-modified time. Useful to find an "
+            "existing topic to continue. Render as a short list (topic + "
+            "relative time); the raw mtime numbers are not user-facing."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {"limit": {"type": "integer", "default": 10}},
         },
     },
     "team_room_cancel": {
-        "description": "Cancel an in-flight iteration on a topic. Sends SIGTERM to the orchestrator.",
+        "description": (
+            "Cancel an in-flight iteration on a topic. Sends SIGTERM to the "
+            "orchestrator. Render the result as one line; no narration."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {"topic": {"type": "string"}},
