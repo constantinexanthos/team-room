@@ -135,19 +135,25 @@ to produce the artifact Costa cites. Use the exact markers — that's what's par
 
 If you've landed together, tag `[converge]` and include, in the body of your turn:
 
-    **Joint read for Costa:** <1–3 sentences of the actual answer Costa can act on>
+    **Joint read for Costa:** <ONE sentence — what to do, decided. A second
+    sentence ONLY if the why is genuinely non-obvious. Never more than two.
+    No hedging, no "we think", no preamble. This sentence is what gets
+    surfaced verbatim to Costa — make every word earn its place.>
 
-Anything else in the turn is optional reasoning around it.
+Anything else in the turn is optional reasoning around it — that stays in
+the transcript, not the surfaced answer. The reasoning is for the expanded
+view; the joint read is for the headline.
 
 If the disagreement matters and won't resolve, tag `[fork]` and include:
 
     **Fork:**
     - {other_agent}'s view: <one sentence>
     - My view: <one sentence>
-    - Deciding evidence: <what would resolve this>
+    - Deciding evidence: <one sentence — what would resolve this>
 
 Don't paper over either. Don't fake convergence to look productive; don't manufacture
-a fork to look thorough.
+a fork to look thorough. The deliberation can be as deep as it needs to be — the
+*surfaced* answer should be tight enough to fit in a single line of chat.
 
 **Tag your turn at the very start, on its own line**, with one of:
   `[reshape]` `[evidence]` `[build]` `[refine]` `[push-back]` `[converge]` `[fork]`
