@@ -96,6 +96,10 @@ def topic_meta_path(topic_id: str) -> Path:
     return ROOM_DIR / f"{topic_id}.topic.json"
 
 
+def brief_path(topic: str) -> Path:
+    return ROOM_DIR / f"{topic}.brief.json"
+
+
 def read_state(topic: str) -> dict:
     p = state_path(topic)
     if not p.exists():
@@ -104,6 +108,22 @@ def read_state(topic: str) -> dict:
         return json.loads(p.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {"status": "idle", "prompt_id": None}
+
+
+def read_brief(topic: str) -> dict | None:
+    """Read the v0.2 envelope artifact for a topic, if present.
+
+    The brief is written by the orchestrator at session close and captures
+    the structured outcome (converged / forked / timed-out / failed) plus
+    the joint read or fork map. None if the brief doesn't exist (older
+    transcripts or in-flight sessions)."""
+    p = brief_path(topic)
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
 
 
 def read_transcript(topic: str) -> list[dict]:
@@ -283,18 +303,44 @@ def tool_ask(args: dict) -> dict:
 
     # Pull messages for this iteration only
     messages = [m for m in read_transcript(topic) if m.get("prompt_id") == prompt_id]
-    return {
+
+    # v0.2 envelope: surface outcome + structured brief as the primary
+    # artifact. The transcript is supporting material. Callers should render
+    # the brief first; transcript is for inspection.
+    final_state = read_state(topic)
+    brief = read_brief(topic)
+    response: dict = {
         "session": {"topic": topic, "prompt_id": prompt_id},
         "status": "complete",
+        "outcome": (brief or {}).get("outcome") or final_state.get("outcome"),
         "messages": messages,
     }
+    if brief is not None:
+        # Only surface the brief if it matches this iteration's prompt_id
+        # — older brief.json files (from a prior run on the same topic)
+        # would mislead the caller otherwise.
+        if brief.get("prompt_id") == prompt_id:
+            response["final_brief"] = brief
+        else:
+            response["final_brief_note"] = (
+                f"brief.json exists but is from a prior iteration "
+                f"(prompt_id={brief.get('prompt_id')!r}); ignored"
+            )
+    return response
 
 
 def tool_status(args: dict) -> dict:
     topic = args.get("topic") or ""
     if not TOPIC_NAME_RE.match(topic):
         return {"error": "invalid topic id"}
-    return read_state(topic)
+    state = read_state(topic)
+    # For completed rooms, attach the structured brief so callers don't need
+    # to make a second call to retrieve the artifact.
+    if state.get("status") == "idle" and state.get("outcome"):
+        brief = read_brief(topic)
+        if brief is not None:
+            state["final_brief"] = brief
+    return state
 
 
 def tool_recent(args: dict) -> dict:
@@ -333,10 +379,16 @@ TOOLS = {
     "team_room_ask": {
         "description": (
             "Open a working session: Claude and Codex deliberate on your question "
-            "together over multiple short turns, then return a structured transcript. "
+            "together over multiple short turns, then return a structured artifact. "
             "Use when a strategic call would benefit from cross-model dialogue "
             "(architecture choices, prioritization, design trade-offs, naming). "
-            "Returns: session info + ordered messages (costa, claude, codex, system)."
+            "Every session ends in exactly one legible terminal state: "
+            "`converged` (joint read for you), `forked` (explicit unresolved "
+            "disagreement with view-mapping), `timed-out` (max turns hit with "
+            "partial progress), or `failed`. The response surfaces the "
+            "structured `final_brief` as the primary artifact, with the raw "
+            "`messages` transcript as supporting material. Render the brief "
+            "first; the transcript is for inspection."
         ),
         "inputSchema": {
             "type": "object",
@@ -352,7 +404,13 @@ TOOLS = {
         },
     },
     "team_room_status": {
-        "description": "Get current iteration state for a topic — useful while wait=false sessions are running.",
+        "description": (
+            "Get current iteration state for a topic. While in-flight, returns "
+            "live status (dialogue/round-1/round-2 + current_agent + turn). "
+            "After completion, returns idle status with `outcome` set and the "
+            "`final_brief` artifact attached. Useful for polling wait=false "
+            "sessions and for retrieving the brief from a previously-run topic."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {"topic": {"type": "string"}},

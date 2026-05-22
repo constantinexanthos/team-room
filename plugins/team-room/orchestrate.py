@@ -130,9 +130,24 @@ read-only task — grep, file read, count — and cite file:line in this turn. Y
 direct-ask {other_agent} when their lens is genuinely sharper ("{other_agent}, your X
 lens is better here — sanity-check Y while I look at Z?").
 
-**Closing.** If you've landed together, address Costa with a short joint read and tag
-the turn `[converge]`. If you genuinely haven't and the disagreement matters, name the
-unresolved fork explicitly and tag `[fork]`. Don't paper over either.
+**Closing.** Two terminal moves; both ship a structured section the system extracts
+to produce the artifact Costa cites. Use the exact markers — that's what's parsed.
+
+If you've landed together, tag `[converge]` and include, in the body of your turn:
+
+    **Joint read for Costa:** <1–3 sentences of the actual answer Costa can act on>
+
+Anything else in the turn is optional reasoning around it.
+
+If the disagreement matters and won't resolve, tag `[fork]` and include:
+
+    **Fork:**
+    - {other_agent}'s view: <one sentence>
+    - My view: <one sentence>
+    - Deciding evidence: <what would resolve this>
+
+Don't paper over either. Don't fake convergence to look productive; don't manufacture
+a fork to look thorough.
 
 **Tag your turn at the very start, on its own line**, with one of:
   `[reshape]` `[evidence]` `[build]` `[refine]` `[push-back]` `[converge]` `[fork]`
@@ -458,6 +473,104 @@ def _has_converged(content: str) -> bool:
     return bool(CONVERGENCE_RE.search(text))
 
 
+# ---------- Outcome classification + structured brief ----------
+# Every dialogue session ends in exactly one of four outcomes:
+#   converged  — agents landed on a joint read for Costa.
+#   forked     — agents explicitly flagged unresolved disagreement.
+#   timed-out  — max_turns reached without [converge] or [fork].
+#   failed     — orchestrator/agent crash or non-zero exit.
+#
+# At session close we also write <topic>.brief.json so the MCP server can
+# surface a single citable artifact alongside the transcript.
+
+JOINT_READ_RE = re.compile(
+    # Stop at: (a) blank line, (b) another **Bold heading**, or (c) end of string.
+    # Whichever comes first. Non-greedy on the body so we don't slurp meta paragraphs.
+    r"\*\*Joint read for Costa:\*\*\s*(?P<body>.+?)(?=\n\s*\n|\n\s*\*\*[A-Z]|\Z)",
+    re.DOTALL | re.IGNORECASE,
+)
+
+FORK_SECTION_RE = re.compile(
+    # Fork sections include the bullets directly under the heading. Stop at
+    # the next non-bullet blank-line gap or another **Bold heading**.
+    r"\*\*Fork:\*\*\s*\n?(?P<body>(?:[-*•+]\s*[^\n]+\n?)+)",
+    re.IGNORECASE,
+)
+
+LEADING_TAG_RE = re.compile(r"\A\s*\[[a-z0-9-]+\]\s*\n?", re.IGNORECASE)
+
+
+def classify_outcome(closing_content: str) -> str:
+    """Return 'converged' | 'forked' | '' (empty if no terminal signal)."""
+    text = closing_content or ""
+    m = TERMINATOR_TAG_RE.match(text)
+    if m:
+        return "forked" if "fork" in m.group(0).lower() else "converged"
+    if CONVERGENCE_RE.search(text):
+        return "converged"
+    return ""
+
+
+def build_brief(
+    topic: str,
+    prompt_id: str,
+    mode: str,
+    outcome: str,
+    closing_turn: dict | None,
+    last_error: str | None = None,
+    max_turns: int | None = None,
+) -> dict:
+    """Build the structured brief dict for <topic>.brief.json.
+
+    closing_turn shape: {"agent": str, "turn": int, "content": str} | None.
+    """
+    brief: dict = {
+        "topic": topic,
+        "prompt_id": prompt_id,
+        "mode": mode,
+        "outcome": outcome,
+        "completed_at": now_iso(),
+        "transcript_path": str(ROOM_DIR / f"{topic}.jsonl"),
+    }
+    if closing_turn:
+        brief["closing_agent"] = closing_turn["agent"]
+        brief["closing_turn"] = closing_turn["turn"]
+    if max_turns is not None:
+        brief["max_turns"] = max_turns
+
+    content = (closing_turn or {}).get("content", "")
+    if outcome == "converged":
+        m = JOINT_READ_RE.search(content)
+        if m:
+            brief["joint_read"] = m.group("body").strip()
+        else:
+            fallback = LEADING_TAG_RE.sub("", content, count=1).strip() or None
+            brief["joint_read"] = fallback
+            brief["parse_note"] = "no **Joint read for Costa:** marker; using full turn content"
+    elif outcome == "forked":
+        m = FORK_SECTION_RE.search(content)
+        if m:
+            brief["fork"] = m.group("body").strip()
+        else:
+            fallback = LEADING_TAG_RE.sub("", content, count=1).strip() or None
+            brief["fork"] = fallback
+            brief["parse_note"] = "no **Fork:** marker; using full turn content"
+    elif outcome == "timed-out":
+        brief["partial"] = LEADING_TAG_RE.sub("", content, count=1).strip() or None
+    elif outcome == "failed":
+        brief["error"] = last_error or "unknown failure"
+    return brief
+
+
+def write_brief(topic: str, brief: dict) -> Path:
+    """Atomic write of <topic>.brief.json."""
+    p = ROOM_DIR / f"{topic}.brief.json"
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    tmp.write_text(json.dumps(brief, indent=2, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, p)
+    return p
+
+
 def _alternating_agent(turn_n: int) -> str:
     """Turn 1 = claude, turn 2 = codex, alternating. Claude opens because the
     user types in their terminal and Claude (this session) is their primary."""
@@ -469,14 +582,18 @@ async def run_dialogue(
     prompt_id: str,
     cwd: str,
     max_turns: int = DIALOGUE_MAX_TURNS,
-) -> bool:
+) -> dict:
     """Live micro-turn dialogue: Claude and Codex alternate short turns,
     reacting to each other, until convergence or max turns.
 
-    Each turn:
-      - the active agent sees the full transcript including the other's last turn
-      - response is capped at DIALOGUE_TURN_WORDS for conversational pace
-      - response is checked for the CONVERGED marker → if so, stop
+    Returns a dict:
+      {
+        "ok": bool,                          # False on agent/orchestrator failure
+        "outcome": "converged"|"forked"|"timed-out"|"failed",
+        "closing_turn": {"agent","turn","content"} | None,
+        "last_error": str | None,
+        "max_turns": int,
+      }
 
     Status semantics during dialogue:
       status='dialogue', turn=N (current turn about to run), max_turns=M,
@@ -484,21 +601,20 @@ async def run_dialogue(
     """
     log(f"dialogue start topic={topic} max_turns={max_turns} words/turn={DIALOGUE_TURN_WORDS}")
 
-    converged = False
+    closing_turn: dict | None = None
+    outcome = "timed-out"  # default if loop completes without converge/fork
     last_turn = 0
+
     for turn_n in range(1, max_turns + 1):
         agent = _alternating_agent(turn_n)
         other = OTHER[agent]
         last_turn = turn_n
 
-        # Mark this turn in-flight under the state lock.
         update_state(topic, {
             "status": "dialogue",
             "turn": turn_n,
             "max_turns": max_turns,
             "current_agent": agent,
-            # Use *_done as: True iff that agent has spoken at least once
-            # in this iteration. Lets the UI show different placeholders.
             "claude_done": turn_n > 1 or agent == "codex",
             "codex_done": turn_n > 1 and agent != "codex" or False,
             "last_error": None,
@@ -526,41 +642,49 @@ async def run_dialogue(
             _, ok, err = await run_agent(agent, topic, prompt_id, turn_n, cwd, prompt)
         except BaseException as e:
             log(f"dialogue turn {turn_n} ({agent}) raised: {e!r}")
-            append_system_message(
-                topic,
-                f"Orchestrator error in dialogue turn {turn_n} ({agent}): {e!r}",
-                prompt_id=prompt_id,
-                round_n=turn_n,
-            )
-            return False
+            err_text = f"Orchestrator error in dialogue turn {turn_n} ({agent}): {e!r}"
+            append_system_message(topic, err_text, prompt_id=prompt_id, round_n=turn_n)
+            return {"ok": False, "outcome": "failed", "closing_turn": closing_turn,
+                    "last_error": err_text, "max_turns": max_turns}
 
         if not ok:
             append_system_message(topic, err, prompt_id=prompt_id, round_n=turn_n)
-            return False
+            return {"ok": False, "outcome": "failed", "closing_turn": closing_turn,
+                    "last_error": err, "max_turns": max_turns}
 
-        # Re-read transcript to inspect what was just appended.
+        # Capture the latest turn — it may be the closing one.
         latest = read_transcript(topic)
         last_msg = latest[-1] if latest else None
-        if last_msg and _has_converged(last_msg.get("content", "")):
-            log(f"dialogue converged at turn {turn_n} ({agent})")
-            converged = True
+        if last_msg:
+            closing_turn = {
+                "agent": last_msg.get("role", agent),
+                "turn": turn_n,
+                "content": last_msg.get("content", ""),
+            }
+
+        content = last_msg.get("content", "") if last_msg else ""
+        signaled = classify_outcome(content)
+        if signaled:
+            outcome = signaled
+            log(f"dialogue {outcome} at turn {turn_n} ({agent})")
             append_system_message(
                 topic,
-                f"converged at turn {turn_n} ({agent})",
+                f"{outcome} at turn {turn_n} ({agent})",
                 prompt_id=prompt_id,
                 round_n=turn_n,
             )
             break
 
-    if not converged and last_turn == max_turns:
+    if outcome == "timed-out" and last_turn == max_turns:
         append_system_message(
             topic,
-            f"reached max_turns={max_turns} without explicit convergence",
+            f"timed-out: reached max_turns={max_turns} without [converge] or [fork]",
             prompt_id=prompt_id,
             round_n=last_turn,
         )
 
-    return True
+    return {"ok": True, "outcome": outcome, "closing_turn": closing_turn,
+            "last_error": None, "max_turns": max_turns}
 
 
 async def run_round(
@@ -624,41 +748,89 @@ async def main_async(topic: str, prompt_id: str, mode: str = "dialogue") -> int:
         "max_turns": None,
         "current_agent": None,
         "last_error": None,
+        # v0.2 envelope: outcome surfaces in state.json so tool_status callers
+        # see the terminal state directly. brief.json holds the full artifact.
+        "outcome": None,
     }
 
     if mode == "dialogue":
         try:
-            ok = await run_dialogue(topic, prompt_id, cwd)
+            result = await run_dialogue(topic, prompt_id, cwd)
         except BaseException as e:
             log(f"dialogue raised: {e!r}")
-            append_system_message(topic, f"Dialogue orchestrator crashed: {e!r}", prompt_id=prompt_id)
-            ok = False
-        final_idle["last_error"] = None if ok else "dialogue had failures"
-        update_state(topic, final_idle)
-        log(f"dialogue done (ok={ok}); state=idle")
-        return 0 if ok else 1
+            err_text = f"Dialogue orchestrator crashed: {e!r}"
+            append_system_message(topic, err_text, prompt_id=prompt_id)
+            result = {"ok": False, "outcome": "failed", "closing_turn": None,
+                     "last_error": err_text, "max_turns": DIALOGUE_MAX_TURNS}
 
-    # --- mode == 'rounds' (legacy R1/R2) ---
+        # Write the structured brief regardless of outcome — the envelope is
+        # contractually "every room ends in a legible terminal state."
+        try:
+            brief = build_brief(
+                topic=topic,
+                prompt_id=prompt_id,
+                mode="dialogue",
+                outcome=result["outcome"],
+                closing_turn=result.get("closing_turn"),
+                last_error=result.get("last_error"),
+                max_turns=result.get("max_turns"),
+            )
+            brief_path = write_brief(topic, brief)
+            log(f"brief written to {brief_path}")
+        except Exception as e:
+            log(f"failed to write brief: {e!r}")
+
+        final_idle["outcome"] = result["outcome"]
+        final_idle["last_error"] = result.get("last_error")
+        update_state(topic, final_idle)
+        log(f"dialogue done (outcome={result['outcome']}, ok={result['ok']}); state=idle")
+        return 0 if result["ok"] else 1
+
+    # --- mode == 'rounds' (opt-in adversarial review) ---
+    rounds_error: str | None = None
     r1_ok = await run_round(topic, prompt_id, 1, cwd)
     if not r1_ok:
         log("R1 had failures; skipping R2 and going idle")
-        final_idle["last_error"] = "one or more agents failed during R1"
-        update_state(topic, final_idle)
-        return 1
+        rounds_error = "one or more agents failed during R1"
+        outcome = "failed"
+    else:
+        update_state(topic, {
+            "status": "round-2",
+            "claude_done": False,
+            "codex_done": False,
+            "last_error": None,
+        })
+        log("transitioned to round-2")
+        r2_ok = await run_round(topic, prompt_id, 2, cwd)
+        if r2_ok:
+            outcome = "completed"
+        else:
+            outcome = "failed"
+            rounds_error = "one or more agents failed during R2"
 
-    update_state(topic, {
-        "status": "round-2",
-        "claude_done": False,
-        "codex_done": False,
-        "last_error": None,
-    })
-    log("transitioned to round-2")
+    # Rounds-mode brief: minimal — outcome + last_error. Critique transcript
+    # is the artifact; no joint_read/fork extraction (rounds is adversarial
+    # review, not collaborative deliberation).
+    try:
+        brief = {
+            "topic": topic,
+            "prompt_id": prompt_id,
+            "mode": "rounds",
+            "outcome": outcome,
+            "completed_at": now_iso(),
+            "transcript_path": str(ROOM_DIR / f"{topic}.jsonl"),
+        }
+        if rounds_error:
+            brief["error"] = rounds_error
+        write_brief(topic, brief)
+    except Exception as e:
+        log(f"failed to write rounds brief: {e!r}")
 
-    r2_ok = await run_round(topic, prompt_id, 2, cwd)
-    final_idle["last_error"] = None if r2_ok else "one or more agents failed during R2"
+    final_idle["outcome"] = outcome
+    final_idle["last_error"] = rounds_error
     update_state(topic, final_idle)
-    log(f"done (R2 ok={r2_ok}); state=idle")
-    return 0 if r2_ok else 1
+    log(f"rounds done (outcome={outcome}); state=idle")
+    return 0 if outcome == "completed" else 1
 
 
 def main() -> int:
