@@ -65,28 +65,34 @@ Respond to Costa's most recent message."""
 DIALOGUE_OPENING_PROMPT = """You're opening a working session with {other_agent} — your
 colleague from a different AI lab — to help Costa land a good answer to the question below.
 
-This isn't a debate or a peer-review. You and {other_agent} are on the same team. Your
-different training data and reasoning patterns are *useful* — between the two of you,
-you'll catch things either of you alone would miss. The goal is to think harder together
-than either of you could alone, and end up with an answer Costa can act on.
+You're teammates, not opponents. Your different training pulls each of you toward
+different lenses, and that asymmetry is the point: division of labor across vantage
+points, not debate. Goal: an answer Costa can act on, that neither of you would have
+produced alone.
 
-You're going first. Open the session by doing one of these:
-  - Take a clear initial position so {other_agent} has something concrete to push on
-  - Frame the question more precisely if Costa's wording leaves real ambiguity
-  - Name what you think matters most about this question, and why
-  - Surface what you're genuinely uncertain about and want {other_agent}'s read on
+**Turn 1 is a framing turn, not an answer turn.** Your job is to give {other_agent} a
+working frame they can improve. Cover, briefly:
+  - The decision you think Costa is actually asking about
+  - The 2–3 criteria that should decide it
+  - One uncertainty you want {other_agent} to test or weigh in on
+  - The lens your training pulls you toward — surface it as a lens, not a status
+    (e.g. "my code-base-heavy prior says…", "my policy/safety lens flags…")
 
-End your turn by giving {other_agent} something to engage with — a position to refine,
-a question to weigh in on, or an explicit handoff ("{other_agent}, what's your read on X?").
+End by handing off something specific for {other_agent} to engage with — a frame to
+reshape, a question to push on, an explicit ask ("{other_agent}, what's your read on X?").
+
+**Escape valve:** if the question is small or already-clear and framing it would be
+ritual, open with `[frame-clear]` and go straight to evidence or recommendation. Use
+sparingly — most non-trivial questions benefit from a real frame.
+
+**Tag your turn at the very start, on its own line:** `[frame]` or `[frame-clear]`.
 
 Be ~{turn_words} words. Conversational, not formal. Don't try to close the question on
-turn 1 — open it. You and {other_agent} will trade turns until you've genuinely landed
-somewhere together.
+turn 1.
 
-You have read-only access to the workspace. If the question is grounded in code or files
-and you need evidence, spawn a sub-agent (Agent tool) to investigate — one read-only
-research task per turn is fine. Cite file:line in your response. Don't guess when you
-can look.
+You have read-only access to the workspace. If grounding the frame needs evidence,
+dispatch a sub-agent (Agent tool) for one read-only research task and cite file:line.
+Don't ask {other_agent} to do lookups you can do yourself.
 
 Costa's question and the conversation so far:
 {full_transcript}
@@ -98,34 +104,45 @@ DIALOGUE_TURN_PROMPT = """You're in a working session with {other_agent} — you
 from a different AI lab — helping Costa land a good answer. This is turn {turn_n} of up
 to {max_turns}. {other_agent} just spoke (their turn is at the bottom of the transcript).
 
-You're teammates, not opponents. The frame here is *think together*, not *grade each
-other*. Respond to what {other_agent} just said the way a good colleague would — engage
-specifically with their reasoning, address them by name, and move the conversation toward
-a real answer.
+You're teammates, not opponents. Engage with {other_agent}'s reasoning specifically,
+address them by name, move the conversation toward a real answer.
 
-Natural moves your turn can take (mix as needed, you don't have to pick just one):
+**Substantive uptake — required, but real.** Open by naming what you're taking from
+{other_agent}'s last turn before adding, narrowing, or challenging anything. If their
+turn genuinely doesn't help, say so plainly and redirect — don't fake agreement.
+Generic "great point, building on that…" is collaboration theater; honest redirect
+beats empty echo.
 
-  - **Build on it:** "{other_agent}, that frames it well — one thing I'd add..."
-  - **Refine:** "{other_agent} — yes, but the case you're describing only holds when X..."
-  - **Defer:** "{other_agent}, you're closer to this than I am — what do you think
-    about Y given what you just said?"
-  - **Update:** "Hmm, {other_agent}, you're right that I missed Z. That changes my read on..."
-  - **Raise something they didn't see:** "{other_agent}, one angle I think we should
-    consider before we land this..."
-  - **Land it:** if you've actually arrived together, write a short closing line
-    addressed to Costa: "Costa, here's where we landed: [the answer]." That ends the
-    session.
+**If you disagree, map the fork — don't score claims.** Identify the condition under
+which {other_agent}'s view holds, the condition where yours differs, and what evidence
+would decide it. Avoid debate vocabulary: no "false claim", "missed risk", "weak
+argument" — that's grading-mode, not team-mode.
 
-Don't perform disagreement to look thorough. If {other_agent} got it right, say so and
-help refine. If they missed something material, raise it as a teammate would, not as a
-debater. Address {other_agent} by name when you respond to a specific thing they said.
+**Asymmetry is a tool.** Lean into your different lenses. "My code-base-heavy prior
+notices…" / "My policy/safety lens flags…" — productive division of labor, not status.
 
-Be ~{turn_words} words. Conversational. You're not writing for an audience — you're
-talking to {other_agent} and to Costa.
+**Turn 2 specifically:** your job is to *reshape* the frame {other_agent} just put
+down before adding new substance. Don't write a parallel essay; improve the working
+brief.
 
-You have read-only access to the workspace. If you need evidence to back what you're
-saying, spawn a sub-agent (Agent tool) for one read-only research task — grep for usage,
-read a config, count occurrences. Cite file:line. Don't guess when you can look.
+**Sub-agents inline.** If you need evidence, dispatch a sub-agent (Agent tool) for a
+read-only task — grep, file read, count — and cite file:line in this turn. You may
+direct-ask {other_agent} when their lens is genuinely sharper ("{other_agent}, your X
+lens is better here — sanity-check Y while I look at Z?").
+
+**Closing.** If you've landed together, address Costa with a short joint read and tag
+the turn `[converge]`. If you genuinely haven't and the disagreement matters, name the
+unresolved fork explicitly and tag `[fork]`. Don't paper over either.
+
+**Tag your turn at the very start, on its own line**, with one of:
+  `[reshape]` `[evidence]` `[build]` `[refine]` `[push-back]` `[converge]` `[fork]`
+
+`[converge]` and `[fork]` are terminal — they close the session. Use `[converge]`
+only if you actually agree on a joint read for Costa; use `[fork]` only if you
+genuinely cannot land. To map an unresolved fork mid-conversation without
+closing, write it in prose and pick a non-terminal tag (`[push-back]`, `[refine]`).
+
+Be ~{turn_words} words. Conversational. You're talking to {other_agent} and to Costa.
 
 The session so far:
 {full_transcript}
@@ -406,14 +423,17 @@ async def run_agent(
 # ---------- Round orchestration ----------
 
 
-# The session closes when an agent signals it explicitly. Two patterns are
-# recognized:
-#   1. "Costa, here's where we landed:" — the natural conversational close
-#      that the new collaborative-framed prompts ask for. Tolerant of common
-#      variants ("Costa — here's...", "Costa: here is where we landed:") and
-#      apostrophe direction.
-#   2. "# CONVERGED" — the legacy marker. Kept for back-compat with older
-#      iterations and as a hard-stop the agents can fall back to.
+# The session closes when an agent signals it explicitly. Three patterns:
+#   1. `[converge]` or `[fork]` as the OPENING tag of the turn (first non-empty
+#      line). `[converge]` = team landed on a joint answer; `[fork]` = they
+#      explicitly flagged unresolved disagreement. Both terminate. Mid-content
+#      mentions of "fork" or `[fork]` are NOT terminators — only the opening
+#      tag is, because the protocol requires the tag at the very start.
+#   2. "Costa, here's where we landed:" — the natural conversational close.
+#      Tolerant of common variants ("Costa — here's...", "Costa: here is where
+#      we landed:") and apostrophe direction.
+#   3. "# CONVERGED" — legacy marker, kept for back-compat with older iterations.
+TERMINATOR_TAG_RE = re.compile(r"\A\s*\[(?:converge|fork)\]\s*(?:\n|$)", re.IGNORECASE)
 CONVERGENCE_RE = re.compile(
     r"(^\s*#\s*CONVERGED\b)"
     r"|(\bCosta[\s,—:-]+here(?:'?s|\s+is)?\s+where\s+we\s+landed\b)",
@@ -422,10 +442,20 @@ CONVERGENCE_RE = re.compile(
 
 
 def _has_converged(content: str) -> bool:
-    """True if an agent's response signals the session has landed —
-    either by addressing Costa with a wrap-up line, or by writing the
-    legacy `# CONVERGED` marker."""
-    return bool(CONVERGENCE_RE.search(content or ""))
+    """True if an agent's response signals the session has landed.
+
+    Recognized signals, in priority order:
+      1. `[converge]` or `[fork]` as the opening tag of the turn (TERMINATOR_TAG_RE).
+         Only the opening tag is treated as terminal — mid-content `[fork]`
+         is treated as prose, not a terminator. This is the v2 collaborative
+         protocol's canonical close signal.
+      2. Legacy "Costa, here's where we landed:" closing line, or "# CONVERGED"
+         marker — kept for back-compat (CONVERGENCE_RE).
+    """
+    text = content or ""
+    if TERMINATOR_TAG_RE.match(text):
+        return True
+    return bool(CONVERGENCE_RE.search(text))
 
 
 def _alternating_agent(turn_n: int) -> str:

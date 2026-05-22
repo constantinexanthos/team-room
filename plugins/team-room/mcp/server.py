@@ -344,7 +344,7 @@ TOOLS = {
                 "question": {"type": "string", "description": "What to deliberate on. Frame precisely."},
                 "project_id": {"type": "string", "description": "Optional project to attach the topic to."},
                 "topic": {"type": "string", "description": "Optional explicit topic id (lowercase + hyphens). Auto-derived if omitted."},
-                "mode": {"type": "string", "enum": ["dialogue", "rounds"], "description": "dialogue (default) = collaborative micro-turns; rounds = legacy R1/R2 structured."},
+                "mode": {"type": "string", "enum": ["dialogue", "rounds"], "description": "dialogue (default) = collaborative working session — Claude and Codex as teammates from different AI labs, framing together, addressing each other by name, mapping forks instead of grading. rounds = opt-in adversarial review mode — each agent answers independently in R1, then critiques the other in R2 with explicit false-claim / missed-risk rubric. Use rounds only when you explicitly want stress-testing rather than collaboration."},
                 "wait": {"type": "boolean", "description": "If true (default), wait for the iteration to complete and return the full transcript. If false, return immediately with a session handle to poll."},
                 "timeout_s": {"type": "integer", "description": "Max seconds to wait when wait=true. Default 600."},
             },

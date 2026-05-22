@@ -14,8 +14,27 @@ import argparse
 import datetime
 import fcntl
 import json
+import re
 import sys
 from pathlib import Path
+
+
+# Function-label tag the collaborative protocol asks agents to put as the first
+# line of their turn — e.g. `[frame]`, `[reshape]`, `[evidence]`, `[converge]`.
+# Captured as a separate `label` field so transcript viewers can render the
+# protocol shape without re-parsing content. The tag stays inline in content
+# too (the next-turn prompt's full_transcript reinforces the convention).
+LABEL_RE = re.compile(r"^\s*\[([a-z][a-z0-9-]{1,15})\]\s*$", re.IGNORECASE)
+
+
+def extract_label(content: str) -> str | None:
+    for line in content.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        m = LABEL_RE.match(s)
+        return m.group(1).lower() if m else None
+    return None
 
 
 def main():
@@ -42,6 +61,9 @@ def main():
         msg["round"] = args.round
     if args.prompt_id is not None:
         msg["prompt_id"] = args.prompt_id
+    label = extract_label(args.content)
+    if label is not None:
+        msg["label"] = label
 
     line = json.dumps(msg, ensure_ascii=False) + "\n"
 
