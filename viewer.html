@@ -7,6 +7,7 @@
   :root {
     --bg: #0b0d10;
     --panel: #14171c;
+    --panel-2: #1b1f26;
     --border: #21262d;
     --text: #e6edf3;
     --muted: #7d8590;
@@ -14,39 +15,129 @@
     --codex: #6cbf6c;
     --costa: #79c0ff;
     --system: #9d8cd5;
+    --danger: #f85149;
+    --shadow: 0 10px 30px rgba(0,0,0,0.4);
   }
   html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font: 14px/1.5 -apple-system, BlinkMacSystemFont, "SF Mono", Menlo, monospace; }
+  body { padding-bottom: 160px; }
   header { padding: 16px 24px; border-bottom: 1px solid var(--border); display: flex; align-items: baseline; gap: 16px; position: sticky; top: 0; background: var(--bg); z-index: 10; }
   header h1 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; color: var(--muted); }
   header .topic { color: var(--text); font-weight: 600; }
   header .count { margin-left: auto; color: var(--muted); font-size: 12px; }
+  header .status-pill { font-size: 10px; padding: 2px 8px; border-radius: 10px; background: rgba(255,255,255,0.04); color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
+  header .status-pill.is-busy { color: var(--costa); }
   main { max-width: 900px; margin: 0 auto; padding: 24px; }
-  .msg { background: var(--panel); border: 1px solid var(--border); border-left-width: 3px; border-radius: 6px; padding: 12px 16px; margin-bottom: 12px; }
+  .msg { background: var(--panel); border: 1px solid var(--border); border-left-width: 3px; border-radius: 6px; padding: 12px 16px; margin-bottom: 12px; animation: fadeIn 240ms ease-out; }
   .msg.role-claude { border-left-color: var(--claude); }
   .msg.role-codex  { border-left-color: var(--codex); }
   .msg.role-costa  { border-left-color: var(--costa); }
   .msg.role-system { border-left-color: var(--system); }
-  .meta { display: flex; gap: 12px; font-size: 11px; color: var(--muted); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.05em; }
+  .meta { display: flex; gap: 12px; font-size: 11px; color: var(--muted); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.05em; align-items: center; }
   .meta .role { font-weight: 600; color: var(--text); }
   .msg.role-claude .meta .role { color: var(--claude); }
   .msg.role-codex  .meta .role { color: var(--codex); }
   .msg.role-costa  .meta .role { color: var(--costa); }
   .msg.role-system .meta .role { color: var(--system); }
+  .meta .round-tag { background: rgba(255,255,255,0.05); padding: 1px 6px; border-radius: 3px; font-size: 10px; letter-spacing: 0.05em; }
   pre { margin: 0; white-space: pre-wrap; word-wrap: break-word; font: 13px/1.55 ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace; }
   .empty { color: var(--muted); padding: 48px 0; text-align: center; }
   .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--codex); margin-right: 8px; animation: pulse 2s ease-in-out infinite; vertical-align: middle; }
   @keyframes pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+  /* Iteration separator */
+  .iter-sep { display: flex; align-items: center; gap: 12px; margin: 24px 0 12px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; }
+  .iter-sep::before, .iter-sep::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+  .iter-sep .label { white-space: nowrap; font-weight: 600; color: var(--muted); }
+  .iter-sep .id { color: var(--text); font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace; }
+
+  /* Thinking skeleton */
+  .skeleton { opacity: 0.85; }
+  .skeleton .thinking { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 13px; padding: 4px 0; }
+  .skeleton .thinking .label { margin-right: 8px; }
+  .skeleton .thinking .dot-typ {
+    width: 5px; height: 5px; border-radius: 50%; display: inline-block;
+    background: currentColor; opacity: 0.3;
+    animation: typing 1.5s ease-in-out infinite;
+  }
+  .skeleton .thinking .dot-typ:nth-child(2) { animation-delay: 0.2s; }
+  .skeleton .thinking .dot-typ:nth-child(3) { animation-delay: 0.4s; }
+  .skeleton.role-claude .thinking { color: var(--claude); }
+  .skeleton.role-codex  .thinking { color: var(--codex); }
+  @keyframes typing {
+    0%, 60%, 100% { opacity: 0.3; transform: translateY(0); }
+    30% { opacity: 1; transform: translateY(-2px); }
+  }
+
+  /* Input dock */
+  .dock { position: fixed; left: 0; right: 0; bottom: 0; background: linear-gradient(180deg, rgba(11,13,16,0) 0%, var(--bg) 30%); padding: 24px 16px 16px; z-index: 20; }
+  .dock-inner { max-width: 900px; margin: 0 auto; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); padding: 10px; display: flex; gap: 10px; align-items: flex-end; transition: border-color 0.15s ease, opacity 0.15s ease; }
+  .dock-inner:focus-within { border-color: var(--costa); }
+  .dock-inner.locked { opacity: 0.6; }
+  .dock textarea {
+    flex: 1; min-height: 22px; max-height: 200px; resize: none;
+    background: transparent; border: 0; color: var(--text);
+    font: 13px/1.55 ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    padding: 6px 8px; outline: none;
+  }
+  .dock textarea::placeholder { color: var(--muted); }
+  .dock textarea:disabled { cursor: not-allowed; }
+  .dock button {
+    background: var(--costa); color: #0b1a2b; border: 0; border-radius: 6px;
+    padding: 8px 16px; font: 600 12px/1 -apple-system, BlinkMacSystemFont, sans-serif;
+    text-transform: uppercase; letter-spacing: 0.08em;
+    cursor: pointer; transition: background 0.1s ease, opacity 0.1s ease;
+    height: 34px; min-width: 84px; display: inline-flex; align-items: center; justify-content: center;
+  }
+  .dock button:hover:not(:disabled) { background: #9ad0ff; }
+  .dock button:disabled { background: var(--panel-2); color: var(--muted); cursor: not-allowed; }
+  .dock .send-spinner {
+    display: inline-block; width: 12px; height: 12px; border-radius: 50%;
+    border: 2px solid currentColor; border-top-color: transparent;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .dock .hint { color: var(--muted); font-size: 10px; text-align: center; margin-top: 6px; letter-spacing: 0.04em; }
+
+  /* Toast */
+  .toast-stack { position: fixed; top: 70px; left: 50%; transform: translateX(-50%); z-index: 30; display: flex; flex-direction: column; gap: 8px; pointer-events: none; max-width: 90vw; }
+  .toast { background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--danger); color: var(--text); padding: 10px 14px; border-radius: 6px; box-shadow: var(--shadow); font-size: 12px; display: flex; gap: 12px; align-items: center; pointer-events: auto; animation: toastIn 200ms ease-out; min-width: 280px; }
+  .toast.is-info { border-left-color: var(--costa); }
+  .toast .toast-msg { flex: 1; }
+  .toast .toast-close { background: transparent; border: 0; color: var(--muted); cursor: pointer; font-size: 16px; line-height: 1; padding: 0 4px; }
+  .toast .toast-close:hover { color: var(--text); }
+  .toast .toast-retry { background: transparent; border: 1px solid var(--border); color: var(--text); padding: 4px 10px; border-radius: 4px; font-size: 11px; cursor: pointer; text-transform: uppercase; letter-spacing: 0.05em; }
+  .toast .toast-retry:hover { border-color: var(--muted); }
+  @keyframes toastIn { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
 </style>
 </head>
 <body>
 <header>
   <h1>Team Room</h1>
   <span class="topic" id="topic">—</span>
+  <span class="status-pill" id="status-pill">idle</span>
   <span class="count"><span class="dot"></span><span id="count-num">0</span> messages</span>
 </header>
 <main id="transcript">
   <div class="empty" id="empty">Waiting for the first message…</div>
 </main>
+
+<div class="toast-stack" id="toast-stack"></div>
+
+<div class="dock">
+  <div class="dock-inner" id="dock-inner">
+    <textarea
+      id="input-textarea"
+      rows="1"
+      placeholder="Type a message to the room…"
+      autocomplete="off"
+      spellcheck="true"
+    ></textarea>
+    <button id="send-btn" type="button" title="Send (Cmd+Enter)">Send</button>
+  </div>
+  <div class="hint">Cmd+Enter (or Ctrl+Enter) to send · One iteration at a time</div>
+</div>
+
 <script>
   const params = new URLSearchParams(location.search);
   const topic = params.get('topic') || 'default';
@@ -55,11 +146,28 @@
 
   let lastLength = 0;
   let lastCount = 0;
+  let currentStatus = 'idle';
+  let claudeDone = false;
+  let codexDone = false;
+  let activePromptId = null;
+  let inFlight = false; // POST /prompt is pending
+
+  const transcriptEl = document.getElementById('transcript');
+  const textareaEl = document.getElementById('input-textarea');
+  const sendBtnEl = document.getElementById('send-btn');
+  const dockInnerEl = document.getElementById('dock-inner');
+  const statusPillEl = document.getElementById('status-pill');
+  const toastStackEl = document.getElementById('toast-stack');
 
   function formatTime(iso) {
     try {
       return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     } catch (e) { return iso; }
+  }
+
+  function shortId(id) {
+    if (!id) return '';
+    return String(id).slice(0, 8);
   }
 
   function renderMessage(msg) {
@@ -78,6 +186,12 @@
     meta.appendChild(roleSpan);
     meta.appendChild(modelSpan);
     meta.appendChild(tsSpan);
+    if (msg.round) {
+      const roundSpan = document.createElement('span');
+      roundSpan.className = 'round-tag';
+      roundSpan.textContent = 'R' + msg.round;
+      meta.appendChild(roundSpan);
+    }
 
     const body = document.createElement('pre');
     body.textContent = msg.content;
@@ -87,41 +201,350 @@
     return wrap;
   }
 
+  function renderSeparator(promptId) {
+    const sep = document.createElement('div');
+    sep.className = 'iter-sep';
+    const label = document.createElement('span');
+    label.className = 'label';
+    label.textContent = 'iteration';
+    const id = document.createElement('span');
+    id.className = 'id';
+    id.textContent = shortId(promptId);
+    sep.appendChild(label);
+    sep.appendChild(id);
+    return sep;
+  }
+
+  function renderSkeleton(role) {
+    const wrap = document.createElement('div');
+    wrap.className = 'msg skeleton role-' + role;
+    wrap.dataset.skeleton = role;
+
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    const roleSpan = document.createElement('span');
+    roleSpan.className = 'role';
+    roleSpan.textContent = role;
+    const modelSpan = document.createElement('span');
+    modelSpan.textContent = role === 'claude' ? 'claude-opus-4-7' : 'gpt-5.5';
+    meta.appendChild(roleSpan);
+    meta.appendChild(modelSpan);
+
+    const thinking = document.createElement('div');
+    thinking.className = 'thinking';
+    const label = document.createElement('span');
+    label.className = 'label';
+    label.textContent = 'thinking';
+    thinking.appendChild(label);
+    for (let i = 0; i < 3; i++) {
+      const d = document.createElement('span');
+      d.className = 'dot-typ';
+      thinking.appendChild(d);
+    }
+
+    wrap.appendChild(meta);
+    wrap.appendChild(thinking);
+    return wrap;
+  }
+
+  function renderTranscript(lines) {
+    while (transcriptEl.firstChild) transcriptEl.removeChild(transcriptEl.firstChild);
+
+    if (lines.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'empty';
+      empty.textContent = 'Waiting for the first message…';
+      transcriptEl.appendChild(empty);
+      return;
+    }
+
+    let lastPromptId = null;
+    for (const line of lines) {
+      let msg;
+      try { msg = JSON.parse(line); } catch (e) { continue; }
+      const pid = msg.prompt_id || null;
+      // Render a separator above the first message of each new prompt-id group.
+      // Messages without a prompt_id render as before (no separator).
+      if (pid && pid !== lastPromptId) {
+        transcriptEl.appendChild(renderSeparator(pid));
+        lastPromptId = pid;
+      } else if (!pid) {
+        // Reset the tracker on legacy messages so a later prompt_id group still
+        // emits its separator (only happens when a manual log.sh row interrupts).
+        lastPromptId = null;
+      }
+      transcriptEl.appendChild(renderMessage(msg));
+    }
+  }
+
+  function renderSkeletons() {
+    // Append skeletons for whichever agents are still in-flight in the current round.
+    if (currentStatus !== 'round-1' && currentStatus !== 'round-2') return;
+    const need = [];
+    if (!claudeDone) need.push('claude');
+    if (!codexDone) need.push('codex');
+    for (const role of need) {
+      transcriptEl.appendChild(renderSkeleton(role));
+    }
+  }
+
+  function updateInputLock() {
+    const busy = currentStatus === 'round-1' || currentStatus === 'round-2' || inFlight;
+    textareaEl.disabled = busy;
+    sendBtnEl.disabled = busy;
+    if (busy) {
+      dockInnerEl.classList.add('locked');
+      dockInnerEl.title = inFlight ? 'sending…' : 'iteration in progress…';
+      textareaEl.title = dockInnerEl.title;
+      sendBtnEl.title = dockInnerEl.title;
+    } else {
+      dockInnerEl.classList.remove('locked');
+      dockInnerEl.title = '';
+      textareaEl.title = '';
+      sendBtnEl.title = 'Send (Cmd+Enter)';
+    }
+  }
+
+  function updateStatusPill() {
+    if (currentStatus === 'idle') {
+      statusPillEl.textContent = 'idle';
+      statusPillEl.classList.remove('is-busy');
+    } else if (currentStatus === 'crashed') {
+      statusPillEl.textContent = 'crashed';
+      statusPillEl.classList.remove('is-busy');
+    } else {
+      statusPillEl.textContent = currentStatus;
+      statusPillEl.classList.add('is-busy');
+    }
+  }
+
+  function showToast(message, opts) {
+    opts = opts || {};
+    const toast = document.createElement('div');
+    toast.className = 'toast' + (opts.kind === 'info' ? ' is-info' : '');
+
+    const msgEl = document.createElement('span');
+    msgEl.className = 'toast-msg';
+    msgEl.textContent = message;
+    toast.appendChild(msgEl);
+
+    if (opts.onRetry) {
+      const retryBtn = document.createElement('button');
+      retryBtn.className = 'toast-retry';
+      retryBtn.type = 'button';
+      retryBtn.textContent = 'Retry';
+      retryBtn.addEventListener('click', () => {
+        toast.remove();
+        opts.onRetry();
+      });
+      toast.appendChild(retryBtn);
+    }
+
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'toast-close';
+    closeBtn.type = 'button';
+    closeBtn.setAttribute('aria-label', 'Dismiss');
+    closeBtn.textContent = '×';
+    closeBtn.addEventListener('click', () => toast.remove());
+    toast.appendChild(closeBtn);
+
+    toastStackEl.appendChild(toast);
+    const ttl = opts.ttl !== undefined ? opts.ttl : 6000;
+    if (ttl > 0) {
+      setTimeout(() => { if (toast.parentNode) toast.remove(); }, ttl);
+    }
+  }
+
+  function setSending(sending) {
+    inFlight = sending;
+    if (sending) {
+      while (sendBtnEl.firstChild) sendBtnEl.removeChild(sendBtnEl.firstChild);
+      const spin = document.createElement('span');
+      spin.className = 'send-spinner';
+      sendBtnEl.appendChild(spin);
+    } else {
+      while (sendBtnEl.firstChild) sendBtnEl.removeChild(sendBtnEl.firstChild);
+      sendBtnEl.appendChild(document.createTextNode('Send'));
+    }
+    updateInputLock();
+  }
+
+  async function sendPrompt() {
+    if (inFlight) return;
+    const content = textareaEl.value.trim();
+    if (!content) return;
+    if (currentStatus !== 'idle') {
+      showToast('Iteration in progress — wait for it to finish.');
+      return;
+    }
+
+    setSending(true);
+    let res;
+    try {
+      res = await fetch('./prompt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ topic, content })
+      });
+    } catch (err) {
+      setSending(false);
+      showToast('Network error sending message.', {
+        onRetry: () => sendPrompt()
+      });
+      return;
+    }
+
+    if (res.status === 202) {
+      let body = {};
+      try { body = await res.json(); } catch (e) { /* ignore */ }
+      activePromptId = body.prompt_id || null;
+      textareaEl.value = '';
+      autosizeTextarea();
+      setSending(false);
+      // Optimistically mark busy; the next status poll will confirm.
+      currentStatus = 'round-1';
+      claudeDone = false;
+      codexDone = false;
+      updateStatusPill();
+      updateInputLock();
+      // Re-render with skeletons immediately.
+      forceRender();
+      // Kick a status poll right away so we sync with the server.
+      pollStatus();
+    } else if (res.status === 409) {
+      setSending(false);
+      let body = {};
+      try { body = await res.json(); } catch (e) { /* ignore */ }
+      const msg = body.error || 'Iteration already in flight.';
+      showToast(msg);
+      // Force a status refresh; UI was out of sync.
+      pollStatus();
+    } else if (res.status >= 500) {
+      setSending(false);
+      let detail = '';
+      try { const b = await res.json(); detail = b.error || ''; } catch (e) { /* ignore */ }
+      showToast('Server error (' + res.status + ')' + (detail ? ': ' + detail : ''), {
+        onRetry: () => sendPrompt()
+      });
+    } else if (res.status === 400) {
+      setSending(false);
+      let detail = '';
+      try { const b = await res.json(); detail = b.error || ''; } catch (e) { /* ignore */ }
+      showToast('Bad request' + (detail ? ': ' + detail : ''));
+    } else {
+      setSending(false);
+      showToast('Unexpected response (' + res.status + ').', {
+        onRetry: () => sendPrompt()
+      });
+    }
+  }
+
+  function autosizeTextarea() {
+    textareaEl.style.height = 'auto';
+    textareaEl.style.height = Math.min(200, textareaEl.scrollHeight) + 'px';
+  }
+
+  sendBtnEl.addEventListener('click', () => sendPrompt());
+  textareaEl.addEventListener('input', autosizeTextarea);
+  textareaEl.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+      e.preventDefault();
+      sendPrompt();
+    }
+  });
+
+  // Re-render with skeletons baked in, even if the transcript bytes haven't changed.
+  function forceRender() {
+    // Re-parse cached transcript text to redraw with current skeleton state.
+    if (cachedLines !== null) {
+      renderTranscript(cachedLines);
+      renderSkeletons();
+    }
+  }
+
+  let cachedLines = null;
   async function poll() {
     try {
       const res = await fetch('./' + topic + '.jsonl?t=' + Date.now(), { cache: 'no-store' });
       if (!res.ok) return;
       const text = await res.text();
-      if (text.length === lastLength) return;
-      lastLength = text.length;
-
       const lines = text.split('\n').filter(Boolean);
-      const transcript = document.getElementById('transcript');
-      while (transcript.firstChild) transcript.removeChild(transcript.firstChild);
+      const changed = text.length !== lastLength;
 
-      if (lines.length === 0) {
-        const empty = document.createElement('div');
-        empty.className = 'empty';
-        empty.textContent = 'Waiting for the first message…';
-        transcript.appendChild(empty);
-      } else {
-        for (const line of lines) {
-          try {
-            transcript.appendChild(renderMessage(JSON.parse(line)));
-          } catch (e) { /* skip malformed line */ }
+      if (changed || cachedLines === null) {
+        lastLength = text.length;
+        cachedLines = lines;
+        renderTranscript(lines);
+        renderSkeletons();
+        document.getElementById('count-num').textContent = String(lines.length);
+        if (lines.length > lastCount) {
+          window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
         }
+        lastCount = lines.length;
       }
-
-      document.getElementById('count-num').textContent = String(lines.length);
-      if (lines.length > lastCount) {
-        window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
-      }
-      lastCount = lines.length;
     } catch (e) { /* network blip, try again */ }
   }
 
+  async function pollStatus() {
+    try {
+      const res = await fetch('./status/' + encodeURIComponent(topic) + '?t=' + Date.now(), { cache: 'no-store' });
+      if (!res.ok) {
+        // Endpoint may not exist yet (server.py still being built). Treat as idle.
+        if (currentStatus !== 'idle') {
+          currentStatus = 'idle';
+          claudeDone = false;
+          codexDone = false;
+          updateStatusPill();
+          updateInputLock();
+          forceRender();
+        }
+        return;
+      }
+      const state = await res.json();
+      const newStatus = state.status || 'idle';
+      const newClaudeDone = !!state.claude_done;
+      const newCodexDone = !!state.codex_done;
+      const changed = newStatus !== currentStatus || newClaudeDone !== claudeDone || newCodexDone !== codexDone;
+      currentStatus = newStatus;
+      claudeDone = newClaudeDone;
+      codexDone = newCodexDone;
+      activePromptId = state.prompt_id || activePromptId;
+      if (changed) {
+        updateStatusPill();
+        updateInputLock();
+        forceRender();
+      }
+      if (state.last_error && state.status === 'idle') {
+        // Show a one-shot toast if a recent run ended with an error and we
+        // haven't seen this error before.
+        if (lastShownError !== state.last_error) {
+          lastShownError = state.last_error;
+          showToast(state.last_error);
+        }
+      }
+    } catch (e) {
+      // Status endpoint unreachable; assume idle so input stays usable.
+      if (currentStatus !== 'idle') {
+        currentStatus = 'idle';
+        claudeDone = false;
+        codexDone = false;
+        updateStatusPill();
+        updateInputLock();
+        forceRender();
+      }
+    }
+  }
+  let lastShownError = null;
+
+  // Initial state.
+  updateInputLock();
+  updateStatusPill();
+  autosizeTextarea();
+
   setInterval(poll, 1500);
+  setInterval(pollStatus, 1500);
   poll();
+  pollStatus();
 </script>
 </body>
 </html>

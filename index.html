@@ -16,6 +16,7 @@
     --codex: #6cbf6c;
     --costa: #79c0ff;
     --system: #9d8cd5;
+    --danger: #f85149;
   }
   html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font: 14px/1.5 -apple-system, BlinkMacSystemFont, "SF Mono", Menlo, monospace; }
   header { padding: 24px 32px; border-bottom: 1px solid var(--border); display: flex; align-items: baseline; gap: 16px; }
@@ -36,6 +37,42 @@
   .role-pill.role-system { color: var(--system); }
   .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--codex); margin-right: 8px; animation: pulse 2s ease-in-out infinite; vertical-align: middle; }
   @keyframes pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
+
+  /* New-topic form */
+  .new-topic { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 24px; }
+  .new-topic .new-topic-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 10px; font-weight: 600; }
+  .new-topic .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .new-topic input[type="text"] {
+    flex: 1; min-width: 180px;
+    background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 8px 10px;
+    font: 13px/1.4 ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    outline: none; transition: border-color 0.1s ease;
+  }
+  .new-topic input[type="text"]:focus { border-color: var(--costa); }
+  .new-topic input[type="text"]::placeholder { color: var(--muted); }
+  .new-topic input.workspace { flex: 2; min-width: 220px; }
+  .new-topic button {
+    background: var(--costa); color: #0b1a2b; border: 0; border-radius: 6px;
+    padding: 8px 18px; font: 600 12px/1 -apple-system, BlinkMacSystemFont, sans-serif;
+    text-transform: uppercase; letter-spacing: 0.08em;
+    cursor: pointer; transition: background 0.1s ease, opacity 0.1s ease;
+    min-width: 86px;
+  }
+  .new-topic button:hover:not(:disabled) { background: #9ad0ff; }
+  .new-topic button:disabled { opacity: 0.6; cursor: not-allowed; }
+  .new-topic .send-spinner {
+    display: inline-block; width: 11px; height: 11px; border-radius: 50%;
+    border: 2px solid currentColor; border-top-color: transparent;
+    animation: spin 0.8s linear infinite; vertical-align: -1px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .new-topic .error {
+    color: var(--danger); font-size: 12px; margin-top: 8px;
+    display: none;
+  }
+  .new-topic .error.is-visible { display: block; }
+  .new-topic .hint { color: var(--muted); font-size: 10px; margin-top: 6px; letter-spacing: 0.02em; }
 </style>
 </head>
 <body>
@@ -44,8 +81,32 @@
   <span class="subtitle">Topics</span>
   <span class="count"><span class="dot"></span><span id="count">0</span> active</span>
 </header>
-<main id="list">
-  <div class="empty">Loading…</div>
+<main>
+  <form class="new-topic" id="new-topic-form" autocomplete="off">
+    <div class="new-topic-label">Start a new topic</div>
+    <div class="row">
+      <input
+        type="text"
+        id="new-topic-name"
+        placeholder="new topic name (lowercase, hyphens)…"
+        pattern="[a-z0-9-]{1,64}"
+        maxlength="64"
+        required
+      />
+      <input
+        type="text"
+        class="workspace"
+        id="new-topic-workspace"
+        placeholder="workspace path (default: $HOME/vigil)"
+      />
+      <button type="submit" id="new-topic-submit">Create</button>
+    </div>
+    <div class="hint">Names: lowercase letters, digits, hyphens; 1-64 chars. Workspace is read-only context for both agents.</div>
+    <div class="error" id="new-topic-error"></div>
+  </form>
+  <div id="list">
+    <div class="empty">Loading…</div>
+  </div>
 </main>
 <script>
   function formatRelative(epochSeconds) {
@@ -101,15 +162,8 @@
     const empty = document.createElement('div');
     empty.className = 'empty';
     const head = document.createElement('div');
-    head.textContent = 'No topics yet.';
-    head.style.marginBottom = '12px';
-    const hint = document.createElement('div');
-    const code = document.createElement('code');
-    code.textContent = './scripts/team-room/ask-codex.sh my-topic "..."';
-    hint.appendChild(document.createTextNode('Start one with '));
-    hint.appendChild(code);
+    head.textContent = 'No topics yet — create one above.';
     empty.appendChild(head);
-    empty.appendChild(hint);
     list.appendChild(empty);
   }
 
@@ -131,6 +185,91 @@
       }
     } catch (e) { /* network blip; retry */ }
   }
+
+  // New-topic form handling.
+  const formEl = document.getElementById('new-topic-form');
+  const nameEl = document.getElementById('new-topic-name');
+  const wsEl = document.getElementById('new-topic-workspace');
+  const submitEl = document.getElementById('new-topic-submit');
+  const errEl = document.getElementById('new-topic-error');
+
+  function showError(msg) {
+    errEl.textContent = msg;
+    errEl.classList.add('is-visible');
+  }
+  function clearError() {
+    errEl.textContent = '';
+    errEl.classList.remove('is-visible');
+  }
+
+  function setSubmitting(submitting) {
+    submitEl.disabled = submitting;
+    nameEl.disabled = submitting;
+    wsEl.disabled = submitting;
+    while (submitEl.firstChild) submitEl.removeChild(submitEl.firstChild);
+    if (submitting) {
+      const spin = document.createElement('span');
+      spin.className = 'send-spinner';
+      submitEl.appendChild(spin);
+    } else {
+      submitEl.appendChild(document.createTextNode('Create'));
+    }
+  }
+
+  formEl.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    clearError();
+    const name = nameEl.value.trim().toLowerCase();
+    const workspace = wsEl.value.trim();
+    if (!name) { showError('Name required.'); return; }
+    if (!/^[a-z0-9-]{1,64}$/.test(name)) {
+      showError('Name must be lowercase letters, digits, or hyphens (1-64 chars).');
+      return;
+    }
+    setSubmitting(true);
+    const body = { name };
+    if (workspace) body.workspace = workspace;
+    let res;
+    try {
+      res = await fetch('./topic', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+    } catch (err) {
+      setSubmitting(false);
+      showError('Network error — is the server running?');
+      return;
+    }
+    if (res.status === 201) {
+      let payload = {};
+      try { payload = await res.json(); } catch (e) { /* ignore */ }
+      const url = payload.url || ('viewer.html?topic=' + encodeURIComponent(name));
+      // Clear before navigating so a back-button visit shows a clean form.
+      nameEl.value = '';
+      wsEl.value = '';
+      setSubmitting(false);
+      window.location.href = url;
+    } else if (res.status === 400) {
+      setSubmitting(false);
+      let detail = 'Invalid topic name.';
+      try { const b = await res.json(); if (b.error) detail = b.error; } catch (e) { /* ignore */ }
+      showError(detail);
+    } else if (res.status === 409) {
+      setSubmitting(false);
+      let detail = 'Topic already exists.';
+      try { const b = await res.json(); if (b.error) detail = b.error; } catch (e) { /* ignore */ }
+      showError(detail);
+    } else {
+      setSubmitting(false);
+      let detail = 'Server error (' + res.status + ').';
+      try { const b = await res.json(); if (b.error) detail += ' ' + b.error; } catch (e) { /* ignore */ }
+      showError(detail);
+    }
+  });
+
+  nameEl.addEventListener('input', clearError);
+  wsEl.addEventListener('input', clearError);
 
   setInterval(poll, 3000);
   poll();
