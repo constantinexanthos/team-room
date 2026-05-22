@@ -208,6 +208,72 @@ def _slugify_workspace(workspace: str) -> str:
     return slug or "project"
 
 
+def _parse_github_url(url: str) -> tuple[str, str] | None:
+    """Parse a github URL or ssh remote into (owner, repo). Returns None on bad input."""
+    if not url:
+        return None
+    u = url.strip()
+    if u.startswith("git@"):
+        # git@github.com:owner/repo.git -> github.com:owner/repo
+        u = u[4:].replace(":", "/", 1)
+        u = "https://" + u
+    if u.endswith(".git"):
+        u = u[:-4]
+    if u.endswith("/"):
+        u = u[:-1]
+    # Now expect https://github.com/owner/repo (or similar host)
+    m = re.match(r"^https?://[^/]+/([^/]+)/([^/]+)$", u)
+    if not m:
+        return None
+    owner, repo = m.group(1), m.group(2)
+    if not owner or not repo:
+        return None
+    return owner, repo
+
+
+def _default_clone_path(owner: str, repo: str) -> str:
+    """Default location for a fresh clone."""
+    home = os.environ.get("HOME") or os.path.expanduser("~")
+    base = Path(home) / "team-room-clones"
+    return str(base / f"{owner}-{repo}")
+
+
+def _git_remote_matches(workspace: str, url: str) -> bool:
+    """True if the workspace's origin URL points at the same repo as `url`."""
+    have = _detect_git_remote(workspace)
+    if not have:
+        return False
+    want_parsed = _parse_github_url(url)
+    have_parsed = _parse_github_url(have)
+    if not want_parsed or not have_parsed:
+        return have == url
+    return want_parsed == have_parsed
+
+
+def _clone_repo(url: str, dest: str, timeout: int = 120) -> tuple[bool, str]:
+    """Run `git clone <url> <dest>`. Returns (ok, error_message)."""
+    parent = os.path.dirname(dest)
+    try:
+        Path(parent).mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        return False, f"could not create parent dir {parent}: {e}"
+    try:
+        proc = subprocess.run(
+            ["git", "clone", "--depth", "50", url, dest],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return False, f"git clone timed out after {timeout}s"
+    except OSError as e:
+        return False, f"git clone failed to start: {e}"
+    if proc.returncode != 0:
+        err = proc.stderr.strip().splitlines()[-1] if proc.stderr.strip() else f"exit {proc.returncode}"
+        return False, f"git clone failed: {err}"
+    return True, ""
+
+
 def _detect_git_remote(workspace: str) -> str | None:
     """Best-effort: read origin URL from `git -C <workspace> remote get-url origin`."""
     try:
@@ -526,6 +592,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self._handle_topic()
         if path == "/projects":
             return self._handle_create_project()
+        if path == "/projects/from-github":
+            return self._handle_create_from_github()
         if path.startswith("/projects/") and path.endswith("/open"):
             project_id = path[len("/projects/"):-len("/open")]
             return self._handle_open_project(project_id)
@@ -763,6 +831,88 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             "id": project_id,
             "name": name.strip(),
             "workspace": workspace,
+            "github_url": github_url,
+            "created_at": now,
+            "last_opened_at": now,
+        }
+        _save_project(project)
+        project["topic_count"] = 0
+        return self._send_json(201, project)
+
+    def _handle_create_from_github(self):
+        """Create a project from a GitHub URL.
+
+        Body: {github_url: required, target_dir: optional, name: optional}
+
+        Behavior:
+          1. If target_dir provided AND exists as a git repo whose origin matches
+             github_url -> reuse it; no clone.
+          2. If target_dir provided AND does not exist -> clone there.
+          3. If target_dir omitted -> derive ~/team-room-clones/<owner>-<repo>;
+             reuse if existing+matching, else clone.
+        """
+        data = self._read_json_body()
+        if data is None:
+            return self._send_json(400, {"error": "invalid json body"})
+
+        github_url = data.get("github_url")
+        if not isinstance(github_url, str) or not github_url.strip():
+            return self._send_json(400, {"error": "github_url required"})
+        github_url = github_url.strip()
+
+        parsed = _parse_github_url(github_url)
+        if parsed is None:
+            return self._send_json(
+                400,
+                {"error": "could not parse GitHub URL; expected https://github.com/owner/repo"},
+            )
+        owner, repo = parsed
+
+        target_dir = data.get("target_dir")
+        if target_dir is not None and not isinstance(target_dir, str):
+            return self._send_json(400, {"error": "target_dir must be a string"})
+        if not target_dir:
+            target_dir = _default_clone_path(owner, repo)
+        target_dir = os.path.expanduser(target_dir)
+
+        if os.path.isdir(target_dir):
+            # Existing dir — must be a git repo whose origin matches.
+            if not os.path.isdir(os.path.join(target_dir, ".git")):
+                return self._send_json(
+                    409,
+                    {
+                        "error": f"target_dir {target_dir} exists but is not a git repo; "
+                        "either delete it, point at the correct local clone, or pick a different target_dir.",
+                    },
+                )
+            if not _git_remote_matches(target_dir, github_url):
+                actual = _detect_git_remote(target_dir) or "(no origin)"
+                return self._send_json(
+                    409,
+                    {
+                        "error": f"target_dir {target_dir} is a git repo but origin is {actual}, "
+                        f"not the requested {github_url}.",
+                    },
+                )
+            # Reuse existing clone.
+        else:
+            # Clone fresh.
+            ok, err = _clone_repo(github_url, target_dir)
+            if not ok:
+                return self._send_json(500, {"error": err})
+
+        # Build the project via the normal create flow.
+        name = data.get("name")
+        if not isinstance(name, str) or not name.strip():
+            name = repo
+
+        base_slug = _slugify_workspace(target_dir)
+        project_id = _ensure_unique_project_id(base_slug)
+        now = _now_utc_iso()
+        project = {
+            "id": project_id,
+            "name": name.strip(),
+            "workspace": target_dir,
             "github_url": github_url,
             "created_at": now,
             "last_opened_at": now,

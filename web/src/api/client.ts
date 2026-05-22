@@ -52,6 +52,8 @@ export const api = {
   listProjects: () => jget<Project[]>('/projects'),
   createProject: (body: { workspace: string; name?: string; github_url?: string }) =>
     jpost<Project>('/projects', body),
+  createProjectFromGithub: (body: { github_url: string; target_dir?: string; name?: string }) =>
+    jpost<Project>('/projects/from-github', body),
   getProject: (id: string) =>
     jget<{ project: Project; topics: Topic[] }>(`/projects/${encodeURIComponent(id)}`),
   updateProject: (id: string, body: Partial<Project>) =>
