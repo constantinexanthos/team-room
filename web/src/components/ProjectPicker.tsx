@@ -16,7 +16,6 @@ export function ProjectPicker({ onOpen }: Props) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [modal, setModal] = useState<ModalMode>(null);
-  const [quickStarting, setQuickStarting] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -36,25 +35,6 @@ export function ProjectPicker({ onOpen }: Props) {
       alive = false;
     };
   }, []);
-
-  async function handleQuickStart() {
-    setError(null);
-    setQuickStarting(true);
-    try {
-      const home = (window as { __HOME__?: string }).__HOME__ || '';
-      // Server resolves the default workspace; send empty/home as a sensible hint.
-      const project = await api.createProject({ workspace: home });
-      onOpen(project);
-    } catch (err) {
-      if (err instanceof ApiError) {
-        const parsed = err.json();
-        setError(parsed?.error ? String(parsed.error) : err.message);
-      } else {
-        setError(String(err));
-      }
-      setQuickStarting(false);
-    }
-  }
 
   async function handleOpenRecent(p: Project) {
     setError(null);
@@ -82,8 +62,8 @@ export function ProjectPicker({ onOpen }: Props) {
           <div className="brand-rise-delay-1">
             <Brand variant="wordmark" />
           </div>
-          <p className="brand-rise-delay-2 text-center text-[12px] text-[var(--color-muted)]">
-            Two minds, one room.
+          <p className="brand-rise-delay-2 text-center font-mono text-[11px] tracking-wider text-[var(--color-muted)]">
+            claude · codex · shared transcript
           </p>
         </header>
 
@@ -98,17 +78,8 @@ export function ProjectPicker({ onOpen }: Props) {
           <PickerRow
             icon={<GlobeIcon />}
             label="Open GitHub project"
-            description="Paste a GitHub URL and pick a local clone"
+            description="Paste a GitHub URL — auto-clones if needed"
             onClick={() => setModal('github')}
-          />
-          <Divider />
-          <PickerRow
-            icon={<PlusIcon />}
-            label="Quick start"
-            description="Open a scratch project in your home directory"
-            onClick={() => void handleQuickStart()}
-            disabled={quickStarting}
-            trailing={quickStarting ? <span className="text-xs text-[var(--color-muted)]">Opening...</span> : null}
           />
         </div>
 
@@ -121,7 +92,7 @@ export function ProjectPicker({ onOpen }: Props) {
         <section className="mt-10">
           <div className="mb-2.5 flex items-center justify-between px-1">
             <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-[var(--color-muted)]">
-              Recents
+              Rooms
             </div>
             {recents.length > 0 && (
               <div className="font-mono text-[10px] text-[var(--color-muted)]/70">
@@ -133,7 +104,7 @@ export function ProjectPicker({ onOpen }: Props) {
             <div className="px-1 text-xs text-[var(--color-muted)]">Loading...</div>
           ) : recents.length === 0 ? (
             <div className="rounded-lg border border-dashed border-[var(--color-border)] px-4 py-6 text-center text-xs text-[var(--color-muted)]">
-              No recent projects yet. Open one above to get started.
+              No rooms yet. Open a project above to get started.
             </div>
           ) : (
             <ul className="divide-y divide-[var(--color-border)] overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-2)]/90">
@@ -234,14 +205,6 @@ function GlobeIcon() {
       <circle cx="12" cy="12" r="9" />
       <path d="M3 12h18" />
       <path d="M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" />
-    </svg>
-  );
-}
-
-function PlusIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M12 5v14M5 12h14" />
     </svg>
   );
 }

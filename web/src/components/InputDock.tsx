@@ -41,14 +41,14 @@ export function InputDock({ locked, lockReason, onSend, placeholder = 'Type a me
   }, [value, locked, sending, onSend]);
 
   const handleKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       void send();
     }
   };
 
   const disabled = locked || sending;
-  const hint = sending ? 'Sending…' : lockReason || 'Cmd+Enter (or Ctrl+Enter) to send';
+  const hint = sending ? 'Sending…' : lockReason || 'Enter to send · Shift+Enter for new line';
 
   return (
     <div className="border-t border-[var(--color-border)] bg-[var(--color-bg)] px-6 py-4">

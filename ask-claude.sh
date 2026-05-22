@@ -54,11 +54,27 @@ if [[ "${1:-}" == "--orchestrate" ]]; then
   TRANSCRIPT="$ROOM_DIR/$TOPIC.jsonl"
   PROMPT="$(cat)"
 
-  RESPONSE="$(printf '%s' "$PROMPT" | (cd "$CWD" && claude --print --disallowedTools "Write Edit Bash NotebookEdit" 2>/dev/null))"
+  # Capture claude stderr to a temp file so failures can be surfaced (not swallowed).
+  STDERR_FILE="$(mktemp -t ask-claude-stderr.XXXXXX)"
+  trap 'rm -f "$STDERR_FILE"' EXIT
+  RESPONSE="$(printf '%s' "$PROMPT" | (cd "$CWD" && claude --print --disallowedTools "Write Edit Bash NotebookEdit" 2>"$STDERR_FILE"))"
+  CLAUDE_EXIT=$?
   RESPONSE="$(printf '%s' "$RESPONSE" | awk 'NF {p=1} p {print}' | sed -e :a -e '/^$/{$d;N;ba' -e '}')"
 
+  if [[ $CLAUDE_EXIT -ne 0 ]]; then
+    echo "claude --print exited $CLAUDE_EXIT" >&2
+    echo "--- claude stderr ---" >&2
+    head -c 4000 "$STDERR_FILE" >&2 || true
+    echo >&2
+    exit 1
+  fi
   if [[ -z "$RESPONSE" ]]; then
-    echo "claude returned empty response" >&2
+    echo "claude returned empty response (exit 0)" >&2
+    if [[ -s "$STDERR_FILE" ]]; then
+      echo "--- claude stderr ---" >&2
+      head -c 4000 "$STDERR_FILE" >&2 || true
+      echo >&2
+    fi
     exit 1
   fi
 

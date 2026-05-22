@@ -55,11 +55,26 @@ if [[ "${1:-}" == "--orchestrate" ]]; then
   TRANSCRIPT="$ROOM_DIR/$TOPIC.jsonl"
   PROMPT="$(cat)"
 
-  RESPONSE="$(printf '%s' "$PROMPT" | (cd "$CWD" && codex exec --sandbox read-only --skip-git-repo-check -c "model_reasoning_effort=$EFFORT" 2>/dev/null))"
+  STDERR_FILE="$(mktemp -t ask-codex-stderr.XXXXXX)"
+  trap 'rm -f "$STDERR_FILE"' EXIT
+  RESPONSE="$(printf '%s' "$PROMPT" | (cd "$CWD" && codex exec --sandbox read-only --skip-git-repo-check -c "model_reasoning_effort=$EFFORT" 2>"$STDERR_FILE"))"
+  CODEX_EXIT=$?
   RESPONSE="$(printf '%s' "$RESPONSE" | awk 'NF {p=1} p {print}' | sed -e :a -e '/^$/{$d;N;ba' -e '}')"
 
+  if [[ $CODEX_EXIT -ne 0 ]]; then
+    echo "codex exec exited $CODEX_EXIT" >&2
+    echo "--- codex stderr ---" >&2
+    head -c 4000 "$STDERR_FILE" >&2 || true
+    echo >&2
+    exit 1
+  fi
   if [[ -z "$RESPONSE" ]]; then
-    echo "codex returned empty response" >&2
+    echo "codex returned empty response (exit 0)" >&2
+    if [[ -s "$STDERR_FILE" ]]; then
+      echo "--- codex stderr ---" >&2
+      head -c 4000 "$STDERR_FILE" >&2 || true
+      echo >&2
+    fi
     exit 1
   fi
 
