@@ -4,5 +4,12 @@
   "description": "Two-mind deliberation room — Claude and Codex collaborate on a question together while you watch. Callable as an MCP tool by any agent.",
   "author": {
     "name": "Costa Xanthos"
+  },
+  "mcpServers": {
+    "team-room": {
+      "type": "stdio",
+      "command": "python3",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/server.py"]
+    }
   }
 }
