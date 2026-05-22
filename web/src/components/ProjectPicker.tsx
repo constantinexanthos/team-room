@@ -3,6 +3,7 @@ import { api, ApiError } from '@/api/client';
 import type { Project } from '@/api/types';
 import { cx, formatRelative, tildify } from '@/lib/utils';
 import { NewProjectModal } from './NewProjectModal';
+import { Brand } from './Brand';
 
 interface Props {
   onOpen: (project: Project) => void;
@@ -71,13 +72,22 @@ export function ProjectPicker({ onOpen }: Props) {
   }
 
   return (
-    <div className="flex h-full items-start justify-center overflow-y-auto px-4 pt-[18vh] pb-12">
+    <div className="brand-wash flex h-full items-start justify-center overflow-y-auto px-4 pt-[14vh] pb-12">
       <div className="w-full max-w-[520px]">
-        <h1 className="mb-8 text-center text-sm font-semibold uppercase tracking-[0.25em] text-[var(--color-muted)]">
-          Team Room
-        </h1>
+        {/* Brand lockup */}
+        <header className="mb-10 flex flex-col items-center gap-3.5">
+          <div className="brand-rise">
+            <Brand variant="mark" size={32} />
+          </div>
+          <div className="brand-rise-delay-1">
+            <Brand variant="wordmark" />
+          </div>
+          <p className="brand-rise-delay-2 text-center text-[12px] text-[var(--color-muted)]">
+            Two minds, one room.
+          </p>
+        </header>
 
-        <div className="overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-2)]">
+        <div className="overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-2)]/90 shadow-[0_1px_0_0_rgba(255,255,255,0.02)_inset]">
           <PickerRow
             icon={<FolderIcon />}
             label="Open project"
@@ -108,36 +118,45 @@ export function ProjectPicker({ onOpen }: Props) {
           </div>
         )}
 
-        <section className="mt-8">
-          <div className="mb-2 px-1 text-xs font-medium uppercase tracking-wider text-[var(--color-muted)]">
-            Recents
+        <section className="mt-10">
+          <div className="mb-2.5 flex items-center justify-between px-1">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-[var(--color-muted)]">
+              Recents
+            </div>
+            {recents.length > 0 && (
+              <div className="font-mono text-[10px] text-[var(--color-muted)]/70">
+                {recents.length}
+              </div>
+            )}
           </div>
           {loading ? (
             <div className="px-1 text-xs text-[var(--color-muted)]">Loading...</div>
           ) : recents.length === 0 ? (
-            <div className="px-1 text-xs text-[var(--color-muted)]">
+            <div className="rounded-lg border border-dashed border-[var(--color-border)] px-4 py-6 text-center text-xs text-[var(--color-muted)]">
               No recent projects yet. Open one above to get started.
             </div>
           ) : (
-            <ul className="divide-y divide-[var(--color-border)] overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-2)]">
+            <ul className="divide-y divide-[var(--color-border)] overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-2)]/90">
               {recents.map((p) => (
                 <li key={p.id}>
                   <button
                     type="button"
                     onClick={() => void handleOpenRecent(p)}
-                    className="group flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-[var(--color-bg-3)]"
+                    className="recent-row group flex w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-[var(--color-bg-3)]"
                   >
-                    <span className="text-[var(--color-muted)] group-hover:text-[var(--color-text)]">
+                    <span className="text-[var(--color-muted)] transition-colors group-hover:text-[var(--color-claude)]">
                       <FolderIcon />
                     </span>
                     <span className="flex-1 truncate">
-                      <span className="block truncate text-sm text-[var(--color-text)]">{p.name}</span>
-                      <span className="block truncate font-mono text-xs text-[var(--color-muted)]">
+                      <span className="block truncate text-[13px] font-medium text-[var(--color-text)]">
+                        {p.name}
+                      </span>
+                      <span className="block truncate font-mono text-[11px] text-[var(--color-muted)]">
                         {tildify(p.workspace)}
                       </span>
                     </span>
                     {p.last_opened_at && (
-                      <span className="shrink-0 text-xs text-[var(--color-muted)]">
+                      <span className="shrink-0 font-mono text-[10px] uppercase tracking-wider text-[var(--color-muted)]">
                         {formatRelative(p.last_opened_at)}
                       </span>
                     )}
@@ -179,15 +198,17 @@ function PickerRow({ icon, label, description, onClick, disabled, trailing }: Ro
       onClick={onClick}
       disabled={disabled}
       className={cx(
-        'flex w-full items-center gap-4 px-4 py-3.5 text-left transition-colors',
+        'picker-row group flex w-full items-center gap-4 px-4 py-3.5 text-left transition-colors',
         'hover:bg-[var(--color-bg-3)] disabled:cursor-not-allowed disabled:opacity-50',
       )}
     >
-      <span className="text-[var(--color-muted)]">{icon}</span>
+      <span className="text-[var(--color-muted)] transition-colors group-hover:text-[var(--color-costa)]">
+        {icon}
+      </span>
       <span className="flex-1">
-        <span className="block text-sm font-medium text-[var(--color-text)]">{label}</span>
+        <span className="block text-[13px] font-medium text-[var(--color-text)]">{label}</span>
         {description && (
-          <span className="block text-xs text-[var(--color-muted)]">{description}</span>
+          <span className="block text-[11px] text-[var(--color-muted)]">{description}</span>
         )}
       </span>
       {trailing ?? <ChevronRightIcon />}
@@ -227,7 +248,7 @@ function PlusIcon() {
 
 function ChevronRightIcon() {
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-[var(--color-muted)]" aria-hidden="true">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-[var(--color-muted)] transition-transform group-hover:translate-x-0.5" aria-hidden="true">
       <path d="M9 6l6 6-6 6" />
     </svg>
   );

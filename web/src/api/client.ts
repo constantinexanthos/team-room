@@ -62,6 +62,13 @@ export const api = {
   openProject: (id: string) => jpost<Project>(`/projects/${encodeURIComponent(id)}/open`, {}),
   recents: () => jget<Project[]>('/recents'),
 
+  // Health probe — confirms claude + codex CLIs are reachable
+  health: () =>
+    jget<{
+      claude: { ok: boolean; version: string | null; error: string | null };
+      codex: { ok: boolean; version: string | null; error: string | null };
+    }>('/health'),
+
   // Topics
   listTopics: (projectId?: string) => {
     const q = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
@@ -69,6 +76,7 @@ export const api = {
   },
   createTopic: (body: { name: string; project_id: string; workspace?: string }) =>
     jpost<{ name: string; url: string }>('/topic', body),
+  deleteTopic: (topicId: string) => jdel(`/topics/${encodeURIComponent(topicId)}`),
 
   // Iteration
   getStatus: (topic: string) =>

@@ -1,5 +1,7 @@
 import type { Project, Topic, AgentRole } from '@/api/types';
 import { cx, tildify } from '@/lib/utils';
+import { Brand } from './Brand';
+import { AgentLogo } from './AgentLogo';
 
 interface Props {
   project: Project;
@@ -27,21 +29,24 @@ export function Sidebar({
 }: Props) {
   return (
     <aside className="flex h-full w-[272px] shrink-0 flex-col border-r border-[var(--color-border)] bg-[var(--color-bg-2)]">
-      <div className="px-4 pt-4">
+      {/* Brand + back-to-projects nav */}
+      <div className="flex items-center gap-2.5 px-4 pt-4 pb-3">
+        <Brand variant="mark" size={16} />
         <button
           type="button"
           onClick={onCloseProject}
-          className="flex items-center gap-1 text-xs uppercase tracking-wider text-[var(--color-muted)] transition-colors hover:text-[var(--color-text)]"
+          className="group flex items-center gap-1 text-[10px] font-semibold uppercase tracking-[0.22em] text-[var(--color-muted)] transition-colors hover:text-[var(--color-text)]"
         >
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="transition-transform group-hover:-translate-x-0.5">
             <path d="M15 6l-6 6 6 6" />
           </svg>
           Projects
         </button>
       </div>
 
-      <div className="px-4 pt-3 pb-4">
-        <div className="truncate text-sm font-semibold text-[var(--color-text)]" title={project.name}>
+      {/* Project identity */}
+      <div className="px-4 pb-4">
+        <div className="truncate text-[13px] font-semibold text-[var(--color-text)]" title={project.name}>
           {project.name}
         </div>
         <div
@@ -55,7 +60,7 @@ export function Sidebar({
             href={project.github_url}
             target="_blank"
             rel="noopener noreferrer"
-            className="mt-1 flex items-center gap-1 truncate text-[11px] text-[var(--color-costa)] hover:underline"
+            className="mt-1.5 inline-flex items-center gap-1 truncate text-[11px] text-[var(--color-costa)] hover:underline"
             title={project.github_url}
           >
             <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -66,63 +71,55 @@ export function Sidebar({
         )}
       </div>
 
-      <div className="px-4 pb-2">
-        <div className="text-[10px] font-semibold uppercase tracking-[0.15em] text-[var(--color-muted)]">
-          Topics
+      {/* Section header */}
+      <div className="px-4 pb-1.5">
+        <div className="flex items-center justify-between">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-[var(--color-muted)]">
+            Topics
+          </div>
+          {topics.length > 0 && (
+            <div className="font-mono text-[10px] text-[var(--color-muted)]/70">
+              {topics.length}
+            </div>
+          )}
         </div>
       </div>
 
+      {/* Topic list */}
       <nav className="flex-1 overflow-y-auto px-2 pb-2">
         {topics.length === 0 ? (
           <div className="px-2 py-2 text-xs text-[var(--color-muted)]">
             No topics yet. Create one to start.
           </div>
         ) : (
-          <ul className="space-y-0.5">
+          <ul className="space-y-px">
             {topics.map((t) => {
               const active = t.id === activeTopicId;
               const inFlight = t.status && t.status !== 'idle' && t.status !== 'crashed';
-              const roleVar = t.last_role ? ROLE_VAR[t.last_role] : undefined;
               return (
                 <li key={t.id}>
                   <button
                     type="button"
                     onClick={() => onSelectTopic(t.id)}
+                    data-active={active ? 'true' : 'false'}
                     className={cx(
-                      'group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors',
+                      'topic-item group flex w-full items-center gap-2 rounded-md pl-3 pr-2 py-1.5 text-left text-[13px]',
                       active
                         ? 'bg-[var(--color-bg-3)] text-[var(--color-text)]'
-                        : 'text-[var(--color-text)]/85 hover:bg-[var(--color-bg-3)]/60 hover:text-[var(--color-text)]',
+                        : 'text-[var(--color-text)]/80 hover:bg-[var(--color-bg-3)]/60 hover:text-[var(--color-text)]',
                     )}
                   >
-                    <span
-                      className={cx(
-                        'inline-block h-1.5 w-1.5 shrink-0 rounded-full',
-                        active ? 'bg-[var(--color-text)]' : 'bg-[var(--color-muted)]/60',
-                      )}
-                      aria-hidden="true"
-                    />
-                    <span className="flex-1 truncate" title={t.id}>
+                    <span className="flex-1 truncate font-medium" title={t.id}>
                       {t.id}
                     </span>
                     {inFlight && (
                       <span
-                        className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--color-costa)]"
+                        className="heartbeat inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--color-costa)] shadow-[0_0_8px_var(--color-costa)]"
                         title={t.status}
-                        aria-label={t.status}
+                        aria-label={t.status ?? 'in-flight'}
                       />
                     )}
-                    {t.last_role && roleVar && (
-                      <span
-                        className="ml-0.5 inline-flex items-center rounded-full px-1.5 py-px text-[9px] font-semibold uppercase tracking-wider"
-                        style={{
-                          color: `var(${roleVar})`,
-                          backgroundColor: `color-mix(in oklab, var(${roleVar}) 18%, transparent)`,
-                        }}
-                      >
-                        {t.last_role}
-                      </span>
-                    )}
+                    {t.last_role && <RolePill role={t.last_role} />}
                   </button>
                 </li>
               );
@@ -131,11 +128,12 @@ export function Sidebar({
         )}
       </nav>
 
+      {/* Footer action */}
       <div className="border-t border-[var(--color-border)] p-3">
         <button
           type="button"
           onClick={onNewTopic}
-          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-[var(--color-muted)] transition-colors hover:bg-[var(--color-bg-3)] hover:text-[var(--color-text)]"
+          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[13px] text-[var(--color-muted)] transition-colors hover:bg-[var(--color-bg-3)] hover:text-[var(--color-text)]"
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <path d="M12 5v14M5 12h14" />
@@ -144,6 +142,32 @@ export function Sidebar({
         </button>
       </div>
     </aside>
+  );
+}
+
+function RolePill({ role }: { role: AgentRole }) {
+  const roleVar = ROLE_VAR[role];
+  const label = role === 'costa' ? 'You' : role.charAt(0).toUpperCase() + role.slice(1);
+
+  return (
+    <span
+      className="inline-flex items-center gap-1 rounded-full px-1.5 py-px text-[9px] font-semibold uppercase tracking-[0.1em]"
+      style={{
+        color: `var(${roleVar})`,
+        backgroundColor: `color-mix(in oklab, var(${roleVar}) 14%, transparent)`,
+      }}
+      title={`Last: ${label}`}
+    >
+      {role === 'claude' || role === 'codex' ? (
+        <AgentLogo agent={role} size={9} />
+      ) : (
+        <span
+          className="inline-block size-1 rounded-full bg-current"
+          aria-hidden="true"
+        />
+      )}
+      <span>{label}</span>
+    </span>
   );
 }
 

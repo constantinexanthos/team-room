@@ -35,8 +35,10 @@ APPENDER = SCRIPT_DIR / "_append-jsonl.py"
 ASK_CLAUDE = SCRIPT_DIR / "ask-claude.sh"
 ASK_CODEX = SCRIPT_DIR / "ask-codex.sh"
 
-# 5 minutes per agent per round, per spec. Overridable for testing via env.
-AGENT_TIMEOUT_S = int(os.environ.get("TEAM_ROOM_AGENT_TIMEOUT", "300"))
+# 8 minutes per agent per round. Codex's first invocation in a fresh workspace
+# (with high reasoning effort + MCP server warm-up + file exploration) can take
+# longer than 5min the first time. Overridable for testing via env.
+AGENT_TIMEOUT_S = int(os.environ.get("TEAM_ROOM_AGENT_TIMEOUT", "480"))
 
 
 # ---------- Prompt templates (verbatim from v2-design.md) ----------
@@ -201,17 +203,22 @@ def format_transcript(msgs: list[dict]) -> str:
     return "\n\n".join(lines)
 
 
-def append_system_message(topic: str, content: str) -> None:
-    """Append a system-role message via the canonical locked appender."""
+def append_system_message(topic: str, content: str, prompt_id: str | None = None, round_n: int | None = None) -> None:
+    """Append a system-role message via the canonical locked appender.
+
+    Passes prompt_id (and optional round) so the message groups with its iteration
+    in the viewer — otherwise timeout/error messages float orphaned with no visual
+    association to the prompt that triggered them.
+    """
     jsonl_path = ROOM_DIR / f"{topic}.jsonl"
+    cmd = [sys.executable, str(APPENDER), str(jsonl_path), "system", "system", content]
+    if round_n is not None:
+        cmd += ["--round", str(round_n)]
+    if prompt_id is not None:
+        cmd += ["--prompt-id", prompt_id]
     try:
-        subprocess.run(
-            [sys.executable, str(APPENDER), str(jsonl_path), "system", "system", content],
-            check=True,
-            timeout=10,
-        )
+        subprocess.run(cmd, check=True, timeout=10)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-        # Last-resort: log to stderr (orchestrate.log) so the failure is visible.
         log(f"FAILED to append system message {content!r}: {e}")
 
 
@@ -338,14 +345,14 @@ async def run_round(
     for r in results:
         if isinstance(r, BaseException):
             log(f"R{round_n} task raised: {r!r}")
-            append_system_message(topic, f"Orchestrator error during R{round_n}: {r!r}")
+            append_system_message(topic, f"Orchestrator error during R{round_n}: {r!r}", prompt_id=prompt_id, round_n=round_n)
             all_ok = False
             continue
         agent, ok, err_msg = r
         # Mark done regardless of success so viewer placeholders clear.
         update_state(topic, {DONE_FLAG[agent]: True})
         if not ok:
-            append_system_message(topic, err_msg)
+            append_system_message(topic, err_msg, prompt_id=prompt_id, round_n=round_n)
             all_ok = False
     return all_ok
 

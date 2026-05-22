@@ -30,6 +30,9 @@ html, body, #root {
   font-family: var(--font-sans);
   font-size: 14px;
   line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
 * { box-sizing: border-box; }
@@ -37,8 +40,144 @@ html, body, #root {
 /* Subtle scrollbar */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 4px; }
-::-webkit-scrollbar-thumb:hover { background: var(--color-border-strong); }
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-border-strong);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
 
 /* Selection */
 ::selection { background: rgba(121, 192, 255, 0.3); }
+
+/* Subtle radial wash behind the landing picker — Conductor-style depth */
+.brand-wash {
+  background:
+    radial-gradient(ellipse 60% 40% at 50% 0%, rgba(121, 192, 255, 0.06), transparent 70%),
+    radial-gradient(ellipse 40% 30% at 30% 20%, rgba(208, 154, 115, 0.05), transparent 60%),
+    radial-gradient(ellipse 40% 30% at 70% 20%, rgba(108, 191, 108, 0.04), transparent 60%);
+}
+
+/* Conductor-style refined card hover — subtle border tint, no jumpy elevation */
+.card-hover-claude {
+  transition: border-color 180ms ease, background-color 180ms ease;
+}
+.card-hover-claude:hover {
+  border-color: color-mix(in oklab, var(--color-claude) 30%, var(--color-border-strong));
+}
+
+.card-hover-costa {
+  transition: border-color 180ms ease, background-color 180ms ease;
+}
+.card-hover-costa:hover {
+  border-color: color-mix(in oklab, var(--color-costa) 30%, var(--color-border-strong));
+}
+
+/* Picker row: subtle accent tint on hover, no layout shift */
+.picker-row {
+  position: relative;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+.picker-row::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: transparent;
+  transition: background-color 180ms ease;
+}
+.picker-row:hover::before {
+  background: color-mix(in oklab, var(--color-costa) 60%, transparent);
+}
+
+/* Recents row hover — restrained */
+.recent-row {
+  position: relative;
+  transition: background-color 160ms ease;
+}
+.recent-row::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: transparent;
+  transition: background-color 180ms ease;
+}
+.recent-row:hover::before {
+  background: color-mix(in oklab, var(--color-claude) 55%, transparent);
+}
+
+/* Topic item — Conductor-style. Compact, with a left rule on hover/active. */
+.topic-item {
+  position: relative;
+  transition: background-color 140ms ease, color 140ms ease;
+}
+.topic-item::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  border-radius: 0 2px 2px 0;
+  background: transparent;
+  transition: background-color 180ms ease;
+}
+.topic-item:hover::before {
+  background: color-mix(in oklab, var(--color-text) 22%, transparent);
+}
+.topic-item[data-active='true']::before {
+  background: var(--color-text);
+}
+
+/* Typing dot animation — tighter, three-step wave */
+@keyframes typing-wave {
+  0%, 60%, 100% { opacity: 0.25; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-1.5px); }
+}
+.typing-dot {
+  animation: typing-wave 1.05s ease-in-out infinite;
+}
+
+/* Status pill — slight inner glow when "live" */
+.status-pill {
+  background:
+    linear-gradient(
+      to bottom,
+      color-mix(in oklab, var(--color-bg-2) 92%, var(--color-text) 8%),
+      var(--color-bg-2)
+    );
+}
+
+/* Live status dot — slow heartbeat */
+@keyframes heartbeat {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+.heartbeat {
+  animation: heartbeat 2.4s ease-in-out infinite;
+}
+
+/* Brand mark hover sheen on the landing page */
+@keyframes brand-rise {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.brand-rise { animation: brand-rise 360ms ease-out both; }
+.brand-rise-delay-1 { animation: brand-rise 360ms 80ms ease-out both; }
+.brand-rise-delay-2 { animation: brand-rise 400ms 160ms ease-out both; }
+
+/* Inline divider for breadcrumbs */
+.chevron-sep {
+  color: var(--color-muted);
+  opacity: 0.5;
+}

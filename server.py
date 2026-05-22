@@ -576,6 +576,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self._handle_get_project(rest)
         if path == "/recents":
             return self._handle_recents()
+        if path == "/health":
+            return self._handle_health()
         if path == "/topics":
             qs = full_path.split("?", 1)[1] if "?" in full_path else ""
             params = dict(p.split("=", 1) for p in qs.split("&") if "=" in p) if qs else {}
@@ -611,6 +613,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if path.startswith("/projects/"):
             project_id = path[len("/projects/"):]
             return self._handle_delete_project(project_id)
+        if path.startswith("/topics/"):
+            topic_id = path[len("/topics/"):]
+            return self._handle_delete_topic(topic_id)
         self._send_json(404, {"error": "not found"})
 
     # --- /status/<topic> ---------------------------------------------------
@@ -794,6 +799,32 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         projects.sort(key=lambda p: p.get("last_opened_at") or "", reverse=True)
         return self._send_json(200, projects[:RECENTS_LIMIT])
 
+    def _handle_health(self):
+        """Probe the local Claude + Codex CLIs. Tells the UI whether the
+        agents are actually reachable so users know responses come from
+        their local subscriptions, not from us."""
+
+        def probe(cmd: list[str]) -> dict:
+            try:
+                proc = subprocess.run(
+                    cmd, capture_output=True, text=True, timeout=5,
+                )
+                if proc.returncode != 0:
+                    return {"ok": False, "version": None, "error": (proc.stderr or proc.stdout or "").strip()[:200]}
+                version = (proc.stdout or "").strip().splitlines()[0] if proc.stdout else ""
+                return {"ok": True, "version": version, "error": None}
+            except FileNotFoundError:
+                return {"ok": False, "version": None, "error": "CLI not found on PATH"}
+            except subprocess.TimeoutExpired:
+                return {"ok": False, "version": None, "error": "version probe timed out"}
+            except OSError as e:
+                return {"ok": False, "version": None, "error": str(e)}
+
+        return self._send_json(200, {
+            "claude": probe(["claude", "--version"]),
+            "codex": probe(["codex", "--version"]),
+        }, no_store=True)
+
     def _handle_get_project(self, project_id: str):
         if not project_id or not PROJECT_ID_RE.match(project_id):
             return self._send_json(400, {"error": "invalid project id"})
@@ -960,6 +991,44 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except OSError as e:
             return self._send_json(500, {"error": f"could not delete: {e}"})
         # Topics' meta files stay (orphaned). User can reassign later.
+        self.send_response(204)
+        self.end_headers()
+
+    def _handle_delete_topic(self, topic_id: str):
+        """Delete a topic: its JSONL transcript, meta file, state, workspace,
+        orchestrator log, and locks. Refuses if an iteration is in flight."""
+        if not topic_id or not TOPIC_NAME_RE.match(topic_id):
+            return self._send_json(400, {"error": "invalid topic id"})
+        # Check state — refuse if a round is in flight.
+        state_json, state_lock, jsonl = _state_paths(topic_id)
+        if state_json.exists():
+            try:
+                state = _read_state(state_json)
+                if state.get("status") not in (None, "idle") and not _is_stale_crashed(state):
+                    return self._send_json(409, {"error": "iteration in flight; wait for it to finish"})
+            except OSError:
+                pass
+        # Delete everything for this topic
+        room = ROOM_DIR
+        candidates = [
+            jsonl,
+            state_json,
+            state_lock,
+            room / f"{topic_id}.state.json.tmp",
+            room / f"{topic_id}.workspace.json",
+            room / f"{topic_id}.orchestrate.log",
+            room / f"{topic_id}.jsonl.lock",
+            _topic_meta_path(topic_id),
+        ]
+        errors = []
+        for path in candidates:
+            try:
+                if path.exists():
+                    path.unlink()
+            except OSError as e:
+                errors.append(f"{path.name}: {e}")
+        if errors:
+            return self._send_json(500, {"error": "; ".join(errors)})
         self.send_response(204)
         self.end_headers()
 
