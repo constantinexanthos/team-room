@@ -247,20 +247,42 @@ async def run_agent(
         "--cwd", cwd,
     ]
     log(f"R{round_n} spawn {agent}: {' '.join(cmd)}")
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        start_new_session=True,  # new pgid so we can kill children too on timeout
-    )
+
+    # IMPORTANT: do NOT pipe stdout/stderr through asyncio. The agent CLIs
+    # (claude --print, codex exec) spawn MCP server daemon children that
+    # inherit fds. Those children stay alive after the wrapper script exits,
+    # holding the stdout/stderr pipes open, which makes proc.communicate()
+    # hang forever even though our helper script has finished its work.
+    # Solution: redirect the helper's stdout/stderr to /dev/null. The agent's
+    # response is written to JSONL by the helper itself via _append-jsonl.py;
+    # we only need to know whether the helper exited cleanly.
+    stderr_log_path = ROOM_DIR / f"{topic}.orchestrate.log"
+    stderr_log_path.parent.mkdir(parents=True, exist_ok=True)
+    stderr_fh = open(stderr_log_path, "a", encoding="utf-8")
     try:
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(input=prompt.encode("utf-8")),
-            timeout=AGENT_TIMEOUT_S,
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=stderr_fh,
+            start_new_session=True,
         )
+    finally:
+        stderr_fh.close()
+
+    # Write the prompt to stdin and close it. We don't await communicate()
+    # because we have no pipes to drain — just wait for the process to exit.
+    try:
+        if proc.stdin is not None:
+            proc.stdin.write(prompt.encode("utf-8"))
+            await proc.stdin.drain()
+            proc.stdin.close()
+    except (BrokenPipeError, ConnectionResetError):
+        pass
+
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=AGENT_TIMEOUT_S)
     except asyncio.TimeoutError:
-        # Kill the whole process group; claude/codex may have fork-execed children.
         try:
             os.killpg(proc.pid, signal.SIGKILL)
         except (ProcessLookupError, PermissionError):
@@ -277,12 +299,10 @@ async def run_agent(
         return agent, False, f"{agent.capitalize()} timed out after {human} during R{round_n}"
 
     if proc.returncode != 0:
-        err = (stderr.decode("utf-8", errors="replace") or "").strip()
-        err_short = err.splitlines()[-1] if err else f"exit {proc.returncode}"
-        log(f"R{round_n} {agent} FAILED (exit {proc.returncode}): {err}")
-        return agent, False, f"{agent.capitalize()} failed during R{round_n}: {err_short}"
+        log(f"R{round_n} {agent} FAILED (exit {proc.returncode}); see stderr above")
+        return agent, False, f"{agent.capitalize()} failed during R{round_n} (exit {proc.returncode}; see {topic}.orchestrate.log)"
 
-    log(f"R{round_n} {agent} OK ({len(stdout)} bytes)")
+    log(f"R{round_n} {agent} OK")
     return agent, True, ""
 
 
