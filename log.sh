@@ -2,6 +2,9 @@
 # Append an arbitrary message to a team-room transcript.
 # Usage: log.sh <topic> <role> <content>
 #   Common roles: claude, codex, costa, system
+#
+# Uses the shared locked-append helper so writes don't interleave with
+# concurrent orchestrator / agent writes.
 
 set -euo pipefail
 
@@ -11,7 +14,7 @@ CONTENT="${3:?usage: log.sh <topic> <role> <content>}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOM_DIR="${TEAM_ROOM_DIR:-$SCRIPT_DIR/.team-room}"
-mkdir -p "$ROOM_DIR"
+APPENDER="$SCRIPT_DIR/_append-jsonl.py"
 
 case "$ROLE" in
   claude) MODEL="claude-opus-4-7" ;;
@@ -21,12 +24,5 @@ case "$ROLE" in
   *)      MODEL="$ROLE" ;;
 esac
 
-python3 -c '
-import json, sys, datetime
-print(json.dumps({
-    "ts": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    "role": sys.argv[1],
-    "model": sys.argv[2],
-    "content": sys.argv[3],
-}))
-' "$ROLE" "$MODEL" "$CONTENT" >> "$ROOM_DIR/$TOPIC.jsonl"
+mkdir -p "$ROOM_DIR"
+python3 "$APPENDER" "$ROOM_DIR/$TOPIC.jsonl" "$ROLE" "$MODEL" "$CONTENT"

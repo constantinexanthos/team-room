@@ -1,30 +1,25 @@
 #!/usr/bin/env bash
-# Send a prompt to Codex CLI, append both the prompt and response to a topic transcript.
-# Usage: ask-codex.sh <topic> <prompt> [asker_role]
-#   asker_role defaults to "claude"; pass "costa" when running directly.
+# Send a prompt to Codex (`codex exec`), append both prompt and response
+# to a topic transcript. Two modes:
+#
+# Mode A — Legacy CLI driver (v1):
+#   ask-codex.sh <topic> <prompt> [asker_role]
+#
+# Mode B — Orchestrator (called by orchestrate.py):
+#   ask-codex.sh --orchestrate --topic <t> --prompt-id <id> --round <1|2> --cwd <workspace> < <prompt-via-stdin>
+#
+# In Mode B, the script:
+#   - Reads the full prompt from stdin (multi-KB transcripts OK)
+#   - Invokes `codex exec --sandbox read-only -c model_reasoning_effort=high` in --cwd
+#   - Appends ONLY the response to <topic>.jsonl with `round` and `prompt_id` set
+#   - Does NOT log the prompt (orchestrator already has it in JSONL)
 
 set -euo pipefail
 
-TOPIC="${1:?usage: ask-codex.sh <topic> <prompt> [asker_role]}"
-PROMPT="${2:?usage: ask-codex.sh <topic> <prompt> [asker_role]}"
-ASKER="${3:-claude}"
-
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOM_DIR="${TEAM_ROOM_DIR:-$SCRIPT_DIR/.team-room}"
-mkdir -p "$ROOM_DIR"
-TRANSCRIPT="$ROOM_DIR/$TOPIC.jsonl"
-
-append() {
-  python3 -c '
-import json, sys, datetime
-print(json.dumps({
-    "ts": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    "role": sys.argv[1],
-    "model": sys.argv[2],
-    "content": sys.argv[3],
-}))
-' "$1" "$2" "$3" >> "$TRANSCRIPT"
-}
+APPENDER="$SCRIPT_DIR/_append-jsonl.py"
+EFFORT="${CODEX_REASONING_EFFORT:-high}"
 
 asker_model() {
   case "$1" in
@@ -34,17 +29,62 @@ asker_model() {
   esac
 }
 
-append "$ASKER" "$(asker_model "$ASKER")" "$PROMPT"
+# ---------- Mode B (orchestrator) ----------
+if [[ "${1:-}" == "--orchestrate" ]]; then
+  shift
+  TOPIC=""
+  PROMPT_ID=""
+  ROUND=""
+  CWD=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --topic)     TOPIC="$2";     shift 2 ;;
+      --prompt-id) PROMPT_ID="$2"; shift 2 ;;
+      --round)     ROUND="$2";     shift 2 ;;
+      --cwd)       CWD="$2";       shift 2 ;;
+      *) echo "unknown arg: $1" >&2; exit 2 ;;
+    esac
+  done
+  : "${TOPIC:?--topic required}"
+  : "${PROMPT_ID:?--prompt-id required}"
+  : "${ROUND:?--round required}"
+  : "${CWD:?--cwd required}"
+  [[ -d "$CWD" ]] || { echo "cwd does not exist: $CWD" >&2; exit 2; }
 
-# When stdin is piped (not a TTY), `codex exec` emits just the response on stdout.
-# stderr carries the diagnostic banner, MCP auth noise, and skill warnings — drop it.
-# Default to high reasoning effort: Costa is on Codex Pro and we use this wrapper
-# for design critique, not lookups. Override via CODEX_REASONING_EFFORT=medium etc.
-EFFORT="${CODEX_REASONING_EFFORT:-high}"
+  mkdir -p "$ROOM_DIR"
+  TRANSCRIPT="$ROOM_DIR/$TOPIC.jsonl"
+  PROMPT="$(cat)"
+
+  RESPONSE="$(printf '%s' "$PROMPT" | (cd "$CWD" && codex exec --sandbox read-only --skip-git-repo-check -c "model_reasoning_effort=$EFFORT" 2>/dev/null))"
+  RESPONSE="$(printf '%s' "$RESPONSE" | awk 'NF {p=1} p {print}' | sed -e :a -e '/^$/{$d;N;ba' -e '}')"
+
+  if [[ -z "$RESPONSE" ]]; then
+    echo "codex returned empty response" >&2
+    exit 1
+  fi
+
+  python3 "$APPENDER" "$TRANSCRIPT" "codex" "gpt-5.5" "$RESPONSE" --round "$ROUND" --prompt-id "$PROMPT_ID"
+  printf '%s\n' "$RESPONSE"
+  exit 0
+fi
+
+# ---------- Mode A (legacy positional) ----------
+TOPIC="${1:?usage: ask-codex.sh <topic> <prompt> [asker_role]   OR   ask-codex.sh --orchestrate ...}"
+PROMPT="${2:?usage: ask-codex.sh <topic> <prompt> [asker_role]   OR   ask-codex.sh --orchestrate ...}"
+ASKER="${3:-claude}"
+
+mkdir -p "$ROOM_DIR"
+TRANSCRIPT="$ROOM_DIR/$TOPIC.jsonl"
+
+python3 "$APPENDER" "$TRANSCRIPT" "$ASKER" "$(asker_model "$ASKER")" "$PROMPT"
+
 RESPONSE="$(printf '%s' "$PROMPT" | codex exec -c "model_reasoning_effort=$EFFORT" 2>/dev/null)"
-
-# Trim trailing blank lines
 RESPONSE="$(printf '%s' "$RESPONSE" | awk 'NF {p=1} p {print}' | sed -e :a -e '/^$/{$d;N;ba' -e '}')"
 
-append "codex" "gpt-5.5" "$RESPONSE"
+if [[ -z "$RESPONSE" ]]; then
+  echo "codex returned empty response" >&2
+  exit 1
+fi
+
+python3 "$APPENDER" "$TRANSCRIPT" "codex" "gpt-5.5" "$RESPONSE"
 printf '%s\n' "$RESPONSE"
