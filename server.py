@@ -23,7 +23,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-ROOM_DIR = Path(__file__).resolve().parent
+ROOM_DIR = Path(os.environ.get("TEAM_ROOM_DIR", Path(__file__).resolve().parent))
 
 # ---------------------------------------------------------------------------
 # Constants / helpers
@@ -186,6 +186,211 @@ def _spawn_orchestrator(topic: str, prompt_id: str, log_path: Path) -> int | Non
 
 
 # ---------------------------------------------------------------------------
+# Projects (v3)
+# ---------------------------------------------------------------------------
+
+PROJECT_ID_RE = re.compile(r"^[a-z0-9-]{1,64}$")
+RECENTS_LIMIT = 10
+
+
+def _project_path(project_id: str) -> Path:
+    return ROOM_DIR / f"{project_id}.project.json"
+
+
+def _topic_meta_path(topic_id: str) -> Path:
+    return ROOM_DIR / f"{topic_id}.topic.json"
+
+
+def _slugify_workspace(workspace: str) -> str:
+    """Derive a stable slug from the workspace dir basename."""
+    base = os.path.basename(os.path.normpath(workspace)).lower()
+    slug = re.sub(r"[^a-z0-9-]+", "-", base).strip("-")
+    return slug or "project"
+
+
+def _detect_git_remote(workspace: str) -> str | None:
+    """Best-effort: read origin URL from `git -C <workspace> remote get-url origin`."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", workspace, "remote", "get-url", "origin"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if proc.returncode != 0:
+            return None
+        url = proc.stdout.strip()
+        if not url:
+            return None
+        # Normalize git@github.com:foo/bar.git → https://github.com/foo/bar
+        if url.startswith("git@"):
+            host_path = url[4:].replace(":", "/", 1)
+            url = f"https://{host_path}"
+        if url.endswith(".git"):
+            url = url[:-4]
+        return url
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def _load_project(project_id: str) -> dict | None:
+    p = _project_path(project_id)
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _save_project(project: dict) -> None:
+    p = _project_path(project["id"])
+    _atomic_write_state(p, project)
+
+
+def _all_projects() -> list[dict]:
+    out = []
+    for p in ROOM_DIR.glob("*.project.json"):
+        try:
+            out.append(json.loads(p.read_text(encoding="utf-8")))
+        except (OSError, json.JSONDecodeError):
+            continue
+    return out
+
+
+def _load_topic_meta(topic_id: str) -> dict | None:
+    p = _topic_meta_path(topic_id)
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _save_topic_meta(topic_meta: dict) -> None:
+    _atomic_write_state(_topic_meta_path(topic_meta["id"]), topic_meta)
+
+
+def _ensure_unique_project_id(base_slug: str) -> str:
+    """Pick a project id that doesn't collide with an existing project file."""
+    candidate = base_slug
+    n = 2
+    while _project_path(candidate).exists():
+        candidate = f"{base_slug}-{n}"
+        n += 1
+    return candidate
+
+
+def _project_topic_count(project_id: str) -> int:
+    count = 0
+    for p in ROOM_DIR.glob("*.topic.json"):
+        try:
+            meta = json.loads(p.read_text(encoding="utf-8"))
+            if meta.get("project_id") == project_id:
+                count += 1
+        except (OSError, json.JSONDecodeError):
+            continue
+    return count
+
+
+def _topics_for_project(project_id: str) -> list[dict]:
+    """Return list of topic dicts (with last_message_at / last_role / status) for a project."""
+    out = []
+    for p in sorted(ROOM_DIR.glob("*.topic.json")):
+        try:
+            meta = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if meta.get("project_id") != project_id:
+            continue
+        topic_id = meta["id"]
+        jsonl = ROOM_DIR / f"{topic_id}.jsonl"
+        last_ts = None
+        last_role = None
+        msg_count = 0
+        if jsonl.exists():
+            try:
+                with jsonl.open("rb") as fh:
+                    fh.seek(0, os.SEEK_END)
+                    size = fh.tell()
+                    if size > 0:
+                        # Count lines (cheap) and grab last role/ts from final line.
+                        fh.seek(0)
+                        for line in fh:
+                            if line.strip():
+                                msg_count += 1
+                        fh.seek(max(0, size - 8192))
+                        chunk = fh.read().splitlines()
+                        for line in reversed(chunk):
+                            if not line.strip():
+                                continue
+                            try:
+                                msg = json.loads(line)
+                                last_role = msg.get("role")
+                                last_ts = msg.get("ts")
+                                break
+                            except json.JSONDecodeError:
+                                continue
+            except OSError:
+                pass
+        # Status (cheap shared-lock read)
+        status = "idle"
+        try:
+            state_json, state_lock, _ = _state_paths(topic_id)
+            if state_json.exists():
+                with open(state_lock, "w") as lockf:
+                    fcntl.flock(lockf, fcntl.LOCK_SH)
+                    try:
+                        status = _read_state(state_json).get("status", "idle")
+                    finally:
+                        fcntl.flock(lockf, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        out.append({
+            "id": topic_id,
+            "project_id": project_id,
+            "created_at": meta.get("created_at"),
+            "last_message_at": last_ts,
+            "last_role": last_role,
+            "message_count": msg_count,
+            "status": status,
+        })
+    out.sort(key=lambda t: (t["last_message_at"] or t["created_at"] or ""), reverse=True)
+    return out
+
+
+def _migrate_legacy_topics_if_needed() -> None:
+    """If no projects exist but topics do, create a 'legacy' project and bind all
+    orphaned topics to it. Idempotent and cheap on subsequent boots."""
+    if any(ROOM_DIR.glob("*.project.json")):
+        return
+    orphan_jsonls = list(ROOM_DIR.glob("*.jsonl"))
+    if not orphan_jsonls:
+        return
+
+    legacy = {
+        "id": "legacy",
+        "name": "Legacy",
+        "workspace": os.environ.get("HOME") or "/",
+        "github_url": None,
+        "created_at": _now_utc_iso(),
+        "last_opened_at": _now_utc_iso(),
+    }
+    _save_project(legacy)
+
+    for jsonl in orphan_jsonls:
+        topic_id = jsonl.stem
+        if _load_topic_meta(topic_id) is not None:
+            continue
+        _save_topic_meta({
+            "id": topic_id,
+            "project_id": "legacy",
+            "created_at": _now_utc_iso(),
+        })
+
+
+# ---------------------------------------------------------------------------
 # topics.json (existing)
 # ---------------------------------------------------------------------------
 
@@ -283,7 +488,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     # --- routing -----------------------------------------------------------
 
     def do_GET(self):
-        path = self.path.split("?", 1)[0]
+        full_path = self.path
+        path = full_path.split("?", 1)[0]
         if path == "/topics.json":
             body = json.dumps(topics()).encode()
             self.send_response(200)
@@ -296,7 +502,20 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if path.startswith("/status/"):
             topic = path[len("/status/"):]
             return self._handle_status(topic)
-        # Default static-file behavior for everything else.
+        # v3 — projects + topics
+        if path == "/projects":
+            return self._handle_list_projects()
+        if path.startswith("/projects/"):
+            rest = path[len("/projects/"):]
+            return self._handle_get_project(rest)
+        if path == "/recents":
+            return self._handle_recents()
+        if path == "/topics":
+            qs = full_path.split("?", 1)[1] if "?" in full_path else ""
+            params = dict(p.split("=", 1) for p in qs.split("&") if "=" in p) if qs else {}
+            project_id = params.get("project_id")
+            return self._handle_list_topics(project_id)
+        # Default static-file behavior (serves the React app from dist/)
         return super().do_GET()
 
     def do_POST(self):
@@ -305,6 +524,25 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self._handle_prompt()
         if path == "/topic":
             return self._handle_topic()
+        if path == "/projects":
+            return self._handle_create_project()
+        if path.startswith("/projects/") and path.endswith("/open"):
+            project_id = path[len("/projects/"):-len("/open")]
+            return self._handle_open_project(project_id)
+        self._send_json(404, {"error": "not found"})
+
+    def do_PATCH(self):
+        path = self.path.split("?", 1)[0]
+        if path.startswith("/projects/"):
+            project_id = path[len("/projects/"):]
+            return self._handle_patch_project(project_id)
+        self._send_json(404, {"error": "not found"})
+
+    def do_DELETE(self):
+        path = self.path.split("?", 1)[0]
+        if path.startswith("/projects/"):
+            project_id = path[len("/projects/"):]
+            return self._handle_delete_project(project_id)
         self._send_json(404, {"error": "not found"})
 
     # --- /status/<topic> ---------------------------------------------------
@@ -474,6 +712,140 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             finally:
                 fcntl.flock(lockf, fcntl.LOCK_UN)
 
+    # --- Projects (v3) -----------------------------------------------------
+
+    def _handle_list_projects(self):
+        projects = _all_projects()
+        for p in projects:
+            p["topic_count"] = _project_topic_count(p["id"])
+        projects.sort(key=lambda p: p.get("last_opened_at") or "", reverse=True)
+        return self._send_json(200, projects)
+
+    def _handle_recents(self):
+        projects = _all_projects()
+        projects.sort(key=lambda p: p.get("last_opened_at") or "", reverse=True)
+        return self._send_json(200, projects[:RECENTS_LIMIT])
+
+    def _handle_get_project(self, project_id: str):
+        if not project_id or not PROJECT_ID_RE.match(project_id):
+            return self._send_json(400, {"error": "invalid project id"})
+        project = _load_project(project_id)
+        if project is None:
+            return self._send_json(404, {"error": "project not found"})
+        project["topic_count"] = _project_topic_count(project_id)
+        topics_list = _topics_for_project(project_id)
+        return self._send_json(200, {"project": project, "topics": topics_list})
+
+    def _handle_create_project(self):
+        data = self._read_json_body()
+        if data is None:
+            return self._send_json(400, {"error": "invalid json body"})
+
+        workspace = data.get("workspace")
+        if not isinstance(workspace, str) or not workspace.strip():
+            return self._send_json(400, {"error": "workspace required"})
+        workspace = os.path.expanduser(workspace)
+        if not os.path.isdir(workspace):
+            return self._send_json(400, {"error": f"workspace is not a directory: {workspace}"})
+
+        name = data.get("name")
+        if not isinstance(name, str) or not name.strip():
+            name = os.path.basename(os.path.normpath(workspace)) or "project"
+
+        github_url = data.get("github_url")
+        if not isinstance(github_url, str) or not github_url.strip():
+            github_url = _detect_git_remote(workspace)
+
+        base_slug = _slugify_workspace(workspace)
+        project_id = _ensure_unique_project_id(base_slug)
+        now = _now_utc_iso()
+        project = {
+            "id": project_id,
+            "name": name.strip(),
+            "workspace": workspace,
+            "github_url": github_url,
+            "created_at": now,
+            "last_opened_at": now,
+        }
+        _save_project(project)
+        project["topic_count"] = 0
+        return self._send_json(201, project)
+
+    def _handle_patch_project(self, project_id: str):
+        if not PROJECT_ID_RE.match(project_id):
+            return self._send_json(400, {"error": "invalid project id"})
+        project = _load_project(project_id)
+        if project is None:
+            return self._send_json(404, {"error": "project not found"})
+        data = self._read_json_body()
+        if data is None:
+            return self._send_json(400, {"error": "invalid json body"})
+
+        for field in ("name", "workspace", "github_url"):
+            if field in data:
+                value = data[field]
+                if field == "workspace":
+                    if not isinstance(value, str) or not value.strip():
+                        return self._send_json(400, {"error": "workspace must be a non-empty string"})
+                    expanded = os.path.expanduser(value)
+                    if not os.path.isdir(expanded):
+                        return self._send_json(400, {"error": f"workspace not a directory: {expanded}"})
+                    project[field] = expanded
+                elif value is None or isinstance(value, str):
+                    project[field] = value
+                else:
+                    return self._send_json(400, {"error": f"{field} must be string or null"})
+        _save_project(project)
+        project["topic_count"] = _project_topic_count(project_id)
+        return self._send_json(200, project)
+
+    def _handle_delete_project(self, project_id: str):
+        if not PROJECT_ID_RE.match(project_id):
+            return self._send_json(400, {"error": "invalid project id"})
+        p = _project_path(project_id)
+        if not p.exists():
+            return self._send_json(404, {"error": "project not found"})
+        try:
+            p.unlink()
+        except OSError as e:
+            return self._send_json(500, {"error": f"could not delete: {e}"})
+        # Topics' meta files stay (orphaned). User can reassign later.
+        self.send_response(204)
+        self.end_headers()
+
+    def _handle_open_project(self, project_id: str):
+        if not PROJECT_ID_RE.match(project_id):
+            return self._send_json(400, {"error": "invalid project id"})
+        project = _load_project(project_id)
+        if project is None:
+            return self._send_json(404, {"error": "project not found"})
+        project["last_opened_at"] = _now_utc_iso()
+        _save_project(project)
+        project["topic_count"] = _project_topic_count(project_id)
+        return self._send_json(200, project)
+
+    def _handle_list_topics(self, project_id: str | None):
+        if project_id is None:
+            # No filter → return all topics with their meta
+            out = []
+            for p in sorted(ROOM_DIR.glob("*.topic.json")):
+                try:
+                    meta = json.loads(p.read_text(encoding="utf-8"))
+                    out.extend(_topics_for_project(meta.get("project_id", "")))
+                except (OSError, json.JSONDecodeError):
+                    continue
+            # dedupe in case
+            seen = set()
+            unique = []
+            for t in out:
+                if t["id"] not in seen:
+                    seen.add(t["id"])
+                    unique.append(t)
+            return self._send_json(200, unique)
+        if not PROJECT_ID_RE.match(project_id):
+            return self._send_json(400, {"error": "invalid project id"})
+        return self._send_json(200, _topics_for_project(project_id))
+
     # --- POST /topic -------------------------------------------------------
 
     def _handle_topic(self):
@@ -483,11 +855,23 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
         name = (data.get("name") or "").strip()
         workspace = data.get("workspace")
+        project_id = data.get("project_id")
 
         if not name or not TOPIC_NAME_RE.match(name):
             return self._send_json(400, {"error": "invalid topic name"})
         if workspace is not None and not isinstance(workspace, str):
             return self._send_json(400, {"error": "workspace must be a string"})
+        if project_id is not None and (not isinstance(project_id, str) or not PROJECT_ID_RE.match(project_id)):
+            return self._send_json(400, {"error": "invalid project_id"})
+
+        # If project_id provided, ensure it exists and default workspace from it.
+        project = None
+        if project_id:
+            project = _load_project(project_id)
+            if project is None:
+                return self._send_json(400, {"error": f"project '{project_id}' does not exist"})
+            if not workspace:
+                workspace = project["workspace"]
 
         topic_jsonl = ROOM_DIR / f"{name}.jsonl"
         workspace_json = ROOM_DIR / f"{name}.workspace.json"
@@ -515,9 +899,22 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     500, {"error": f"could not write workspace file: {e}"}
                 )
 
+        # Write topic meta (v3) so project membership persists.
+        if project_id:
+            try:
+                _save_topic_meta({
+                    "id": name,
+                    "project_id": project_id,
+                    "created_at": _now_utc_iso(),
+                })
+            except OSError as e:
+                return self._send_json(
+                    500, {"error": f"could not write topic meta: {e}"}
+                )
+
         return self._send_json(
             201,
-            {"name": name, "url": f"/viewer.html?topic={name}"},
+            {"name": name, "url": f"/?topic={name}", "project_id": project_id},
         )
 
     # --- logging -----------------------------------------------------------
@@ -537,6 +934,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 def main():
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8765
     os.chdir(ROOM_DIR)
+    _migrate_legacy_topics_if_needed()
     server = http.server.ThreadingHTTPServer(("", port), Handler)
     print(f"Team room serving on http://localhost:{port}")
     try:
