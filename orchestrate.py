@@ -317,52 +317,63 @@ async def run_agent(
     # we only need to know whether the helper exited cleanly.
     stderr_log_path = ROOM_DIR / f"{topic}.orchestrate.log"
     stderr_log_path.parent.mkdir(parents=True, exist_ok=True)
-    stderr_fh = open(stderr_log_path, "a", encoding="utf-8")
+    # Open a low-level fd we control explicitly. Passing a Python file object
+    # to asyncio.create_subprocess_exec only takes a dup of its underlying fd;
+    # the file object's buffer state in the parent doesn't matter, but we MUST
+    # keep our fd alive until the child exits or the kernel closes the write
+    # side and the child's writes silently disappear into a pipe-closed errno.
+    stderr_fd = os.open(stderr_log_path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+    proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.DEVNULL,
-            stderr=stderr_fh,
+            stderr=stderr_fd,
             start_new_session=True,
         )
-    finally:
-        stderr_fh.close()
 
-    # Write the prompt to stdin and close it. We don't await communicate()
-    # because we have no pipes to drain — just wait for the process to exit.
-    try:
-        if proc.stdin is not None:
-            proc.stdin.write(prompt.encode("utf-8"))
-            await proc.stdin.drain()
-            proc.stdin.close()
-    except (BrokenPipeError, ConnectionResetError):
-        pass
-
-    try:
-        await asyncio.wait_for(proc.wait(), timeout=AGENT_TIMEOUT_S)
-    except asyncio.TimeoutError:
+        # Write the prompt and close stdin so the child sees EOF.
         try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
+            if proc.stdin is not None:
+                proc.stdin.write(prompt.encode("utf-8"))
+                await proc.stdin.drain()
+                proc.stdin.close()
+        except (BrokenPipeError, ConnectionResetError):
             pass
+
         try:
-            await asyncio.wait_for(proc.wait(), timeout=5)
+            await asyncio.wait_for(proc.wait(), timeout=AGENT_TIMEOUT_S)
         except asyncio.TimeoutError:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                pass
+            log(f"R{round_n} {agent} TIMED OUT after {AGENT_TIMEOUT_S}s")
+            if AGENT_TIMEOUT_S >= 60:
+                human = f"{AGENT_TIMEOUT_S // 60}min"
+            else:
+                human = f"{AGENT_TIMEOUT_S}s"
+            return agent, False, f"{agent.capitalize()} timed out after {human} during R{round_n}"
+
+        if proc.returncode != 0:
+            log(f"R{round_n} {agent} FAILED (exit {proc.returncode}); see stderr in this log above")
+            return agent, False, f"{agent.capitalize()} failed during R{round_n} (exit {proc.returncode}; see {topic}.orchestrate.log)"
+
+        log(f"R{round_n} {agent} OK")
+        return agent, True, ""
+    finally:
+        # Close our fd only after the subprocess has exited (or has been
+        # killed). The kernel keeps the file open as long as the child has
+        # its dup'd fd, but closing ours frees the descriptor in our process.
+        try:
+            os.close(stderr_fd)
+        except OSError:
             pass
-        log(f"R{round_n} {agent} TIMED OUT after {AGENT_TIMEOUT_S}s")
-        if AGENT_TIMEOUT_S >= 60:
-            human = f"{AGENT_TIMEOUT_S // 60}min"
-        else:
-            human = f"{AGENT_TIMEOUT_S}s"
-        return agent, False, f"{agent.capitalize()} timed out after {human} during R{round_n}"
-
-    if proc.returncode != 0:
-        log(f"R{round_n} {agent} FAILED (exit {proc.returncode}); see stderr above")
-        return agent, False, f"{agent.capitalize()} failed during R{round_n} (exit {proc.returncode}; see {topic}.orchestrate.log)"
-
-    log(f"R{round_n} {agent} OK")
-    return agent, True, ""
 
 
 # ---------- Round orchestration ----------

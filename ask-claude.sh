@@ -57,8 +57,12 @@ if [[ "${1:-}" == "--orchestrate" ]]; then
   # Capture claude stderr to a temp file so failures can be surfaced (not swallowed).
   STDERR_FILE="$(mktemp -t ask-claude-stderr.XXXXXX)"
   trap 'rm -f "$STDERR_FILE"' EXIT
+  # Disable set -e for the critical block: pipefail would kill us before we
+  # capture the exit code, so the stderr reporting below would never fire.
+  set +e
   RESPONSE="$(printf '%s' "$PROMPT" | (cd "$CWD" && claude --print --disallowedTools "Write Edit Bash NotebookEdit" 2>"$STDERR_FILE"))"
   CLAUDE_EXIT=$?
+  set -e
   RESPONSE="$(printf '%s' "$RESPONSE" | awk 'NF {p=1} p {print}' | sed -e :a -e '/^$/{$d;N;ba' -e '}')"
 
   if [[ $CLAUDE_EXIT -ne 0 ]]; then

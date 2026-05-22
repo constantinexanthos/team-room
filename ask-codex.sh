@@ -57,8 +57,11 @@ if [[ "${1:-}" == "--orchestrate" ]]; then
 
   STDERR_FILE="$(mktemp -t ask-codex-stderr.XXXXXX)"
   trap 'rm -f "$STDERR_FILE"' EXIT
+  # set +e: pipefail would kill the script before we reach the error reporting.
+  set +e
   RESPONSE="$(printf '%s' "$PROMPT" | (cd "$CWD" && codex exec --sandbox read-only --skip-git-repo-check -c "model_reasoning_effort=$EFFORT" 2>"$STDERR_FILE"))"
   CODEX_EXIT=$?
+  set -e
   RESPONSE="$(printf '%s' "$RESPONSE" | awk 'NF {p=1} p {print}' | sed -e :a -e '/^$/{$d;N;ba' -e '}')"
 
   if [[ $CODEX_EXIT -ne 0 ]]; then
