@@ -51,15 +51,14 @@ export function InputDock({ locked, lockReason, onSend, placeholder = 'Type a me
   const hint = sending ? 'Sending…' : lockReason || 'Enter to send · Shift+Enter for new line';
 
   return (
-    <div className="border-t border-[var(--color-border)] bg-[var(--color-bg)] px-6 py-4">
+    <div className="dock-glass px-6 pt-6 pb-5">
       <div className="mx-auto max-w-[860px]">
         <div
           className={cx(
-            'flex items-end gap-3 rounded-lg border bg-[var(--color-bg-2)] p-3 transition-colors',
-            disabled
-              ? 'border-[var(--color-border)] opacity-60'
-              : 'border-[var(--color-border)] focus-within:border-[var(--color-costa)]',
+            'dock-shell flex items-end gap-3 rounded-2xl px-4 py-3 transition-all duration-200',
+            disabled && 'opacity-70',
           )}
+          data-busy={disabled}
         >
           <textarea
             ref={textareaRef}
@@ -70,7 +69,7 @@ export function InputDock({ locked, lockReason, onSend, placeholder = 'Type a me
             onKeyDown={handleKey}
             placeholder={placeholder}
             spellCheck
-            className="flex-1 resize-none bg-transparent font-mono text-[13px] leading-relaxed text-[var(--color-text)] placeholder:text-[var(--color-muted)] focus:outline-none disabled:cursor-not-allowed"
+            className="flex-1 resize-none bg-transparent font-mono text-[13px] leading-relaxed text-[var(--color-text)] placeholder:text-[var(--color-muted)]/70 focus:outline-none disabled:cursor-not-allowed"
             style={{ minHeight: 22, maxHeight: 240 }}
           />
           <button
@@ -78,17 +77,20 @@ export function InputDock({ locked, lockReason, onSend, placeholder = 'Type a me
             onClick={() => void send()}
             disabled={disabled || !value.trim()}
             className={cx(
-              'shrink-0 rounded-md px-4 py-2 text-[12px] font-semibold uppercase tracking-wider transition-colors',
+              'send-btn shrink-0 rounded-xl px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] transition-all duration-200',
               disabled || !value.trim()
-                ? 'cursor-not-allowed bg-[var(--color-bg-3)] text-[var(--color-muted)]'
-                : 'bg-[var(--color-costa)] text-[var(--color-bg)] hover:opacity-90',
+                ? 'cursor-not-allowed text-[var(--color-muted)]'
+                : 'text-[var(--color-bg)] hover:scale-[1.02] active:scale-[0.98]',
             )}
-            title="Send (Cmd+Enter)"
+            data-ready={!disabled && !!value.trim()}
+            title="Send (Enter)"
           >
             Send
           </button>
         </div>
-        <div className="mt-2 text-center text-[11px] tracking-wider text-[var(--color-muted)]">{hint}</div>
+        <div className="mt-2.5 text-center text-[10px] tracking-[0.18em] uppercase text-[var(--color-muted)]/70">
+          {hint}
+        </div>
       </div>
     </div>
   );

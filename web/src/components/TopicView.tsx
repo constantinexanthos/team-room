@@ -3,6 +3,7 @@ import { api, ApiError } from '@/api/client';
 import type { Message, Project, Topic, TopicStatus } from '@/api/types';
 import { useTranscript } from '@/hooks/useTranscript';
 import { useStatus } from '@/hooks/useStatus';
+import { usePartial } from '@/hooks/usePartial';
 import { shortPromptId } from '@/lib/utils';
 import { MessageBubble } from './MessageBubble';
 import { ThinkingBubble } from './ThinkingBubble';
@@ -111,7 +112,7 @@ export function TopicView({ topic, project }: Props) {
           )}
 
           {/* In-flight skeleton bubbles */}
-          {isBusy && <InFlightSkeletons status={status} />}
+          {isBusy && <InFlightSkeletons topicId={topic.id} status={status} />}
         </div>
 
         {toast && (
@@ -178,17 +179,21 @@ function IterationGroup({
   );
 }
 
-function InFlightSkeletons({ status }: { status: TopicStatus }) {
+function InFlightSkeletons({ topicId, status }: { topicId: string; status: TopicStatus }) {
   // Live dialogue mode: only the current_agent is thinking. The other is
   // waiting their turn. Show a single skeleton so it reads as one continuous
-  // back-and-forth, not parallel essays.
+  // back-and-forth, not parallel essays. Stream the partial-text sidecar
+  // file so the bubble fills in token-by-token rather than dropping a wall
+  // of text at the end.
   if (status.status === 'dialogue') {
-    const who = status.current_agent;
-    if (!who) return null;
-    return <ThinkingBubble role={who} />;
+    return <DialoguePartialBubble topicId={topicId} status={status} />;
   }
   // Legacy rounds mode: pair of skeletons, one disappears when its agent
-  // is done in the current round.
+  // is done in the current round. (No partial-text wiring here yet — the
+  // streaming protocol is keyed by `turn`, but rounds mode uses round 1/2
+  // with two agents in parallel; the partial files exist per agent-turn
+  // but pairing them to the right skeleton is more involved. Punt on
+  // streaming for the legacy rounds path.)
   const skeletons: Array<'claude' | 'codex'> = [];
   if (!status.claude_done) skeletons.push('claude');
   if (!status.codex_done) skeletons.push('codex');
@@ -200,6 +205,17 @@ function InFlightSkeletons({ status }: { status: TopicStatus }) {
       ))}
     </>
   );
+}
+
+function DialoguePartialBubble({ topicId, status }: { topicId: string; status: TopicStatus }) {
+  const who = status.current_agent;
+  const promptId = status.prompt_id ?? null;
+  const turn = status.turn ?? null;
+  // Hooks must run unconditionally; pass null when fields aren't ready
+  // and usePartial will no-op until they are.
+  const { text } = usePartial(topicId, promptId, turn);
+  if (!who) return null;
+  return <ThinkingBubble role={who} partial={text} />;
 }
 
 function EmptyState() {

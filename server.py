@@ -30,6 +30,9 @@ ROOM_DIR = Path(os.environ.get("TEAM_ROOM_DIR", Path(__file__).resolve().parent)
 # ---------------------------------------------------------------------------
 
 TOPIC_NAME_RE = re.compile(r"^[a-z0-9-]{1,64}$")
+# Partial-file path components (prompt_id, turn) — keep this strict so
+# `/partial/<topic>/<prompt_id>/<turn>` can never reach outside ROOM_DIR.
+PARTIAL_COMPONENT_RE = re.compile(r"^[a-z0-9-]{1,64}$")
 STALE_CRASH_SECONDS = 10 * 60  # 10 minutes
 
 
@@ -571,6 +574,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if path.startswith("/status/"):
             topic = path[len("/status/"):]
             return self._handle_status(topic)
+        if path.startswith("/partial/"):
+            return self._handle_partial(path[len("/partial/"):])
         # v3 — projects + topics
         if path == "/projects":
             return self._handle_list_projects()
@@ -636,6 +641,46 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             finally:
                 fcntl.flock(lockf, fcntl.LOCK_UN)
         return self._send_json(200, state)
+
+    # --- /partial/<topic>/<prompt_id>/<turn> ------------------------------
+    #
+    # Serves the streaming sidecar file written by ask-claude.sh / ask-codex.sh
+    # while an agent's turn is in flight. Returns plain text (utf-8). 404 once
+    # the file is gone (turn complete or never started). `Cache-Control: no-store`
+    # so the UI's 250ms polling is never served a stale browser-cached body.
+    def _handle_partial(self, rest: str):
+        rest = rest.strip("/")
+        parts = rest.split("/")
+        if len(parts) != 3:
+            return self._send_json(400, {"error": "expected /partial/<topic>/<prompt_id>/<turn>"})
+        topic, prompt_id, turn = parts
+        if not (
+            PARTIAL_COMPONENT_RE.match(topic)
+            and PARTIAL_COMPONENT_RE.match(prompt_id)
+            and PARTIAL_COMPONENT_RE.match(turn)
+        ):
+            return self._send_json(400, {"error": "invalid partial path component"})
+        path = ROOM_DIR / f"{topic}.partial.{prompt_id}.{turn}.txt"
+        # Defense in depth: ensure the resolved path is still inside ROOM_DIR.
+        try:
+            resolved = path.resolve()
+            room_resolved = ROOM_DIR.resolve()
+            if room_resolved not in resolved.parents and resolved != room_resolved:
+                return self._send_json(400, {"error": "path traversal"})
+        except OSError:
+            return self._send_json(400, {"error": "invalid path"})
+        if not path.exists():
+            return self._send_json(404, {"error": "no partial"}, no_store=True)
+        try:
+            body = path.read_bytes()
+        except OSError as e:
+            return self._send_json(500, {"error": f"could not read partial: {e}"})
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     # --- POST /prompt ------------------------------------------------------
 

@@ -3,6 +3,7 @@ import { api, ApiError } from '@/api/client';
 import type { Project } from '@/api/types';
 import { cx, formatRelative, tildify } from '@/lib/utils';
 import { NewProjectModal } from './NewProjectModal';
+import { ConfirmModal } from './ConfirmModal';
 import { Brand } from './Brand';
 
 interface Props {
@@ -16,6 +17,7 @@ export function ProjectPicker({ onOpen }: Props) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [modal, setModal] = useState<ModalMode>(null);
+  const [pendingDelete, setPendingDelete] = useState<Project | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -49,6 +51,15 @@ export function ProjectPicker({ onOpen }: Props) {
         setError(String(err));
       }
     }
+  }
+
+  async function handleConfirmDelete() {
+    if (!pendingDelete) return;
+    const targetId = pendingDelete.id;
+    await api.deleteProject(targetId);
+    // Success — drop from local list, close modal.
+    setRecents((prev) => prev.filter((p) => p.id !== targetId));
+    setPendingDelete(null);
   }
 
   return (
@@ -110,28 +121,42 @@ export function ProjectPicker({ onOpen }: Props) {
             <ul className="divide-y divide-[var(--color-border)] overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-2)]/90">
               {recents.map((p) => (
                 <li key={p.id}>
-                  <button
-                    type="button"
-                    onClick={() => void handleOpenRecent(p)}
-                    className="recent-row group flex w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-[var(--color-bg-3)]"
-                  >
-                    <span className="text-[var(--color-muted)] transition-colors group-hover:text-[var(--color-claude)]">
-                      <FolderIcon />
-                    </span>
-                    <span className="flex-1 truncate">
-                      <span className="block truncate text-[13px] font-medium text-[var(--color-text)]">
-                        {p.name}
+                  <div className="recent-row group flex w-full items-center gap-3 px-4 py-2.5 hover:bg-[var(--color-bg-3)]">
+                    <button
+                      type="button"
+                      onClick={() => void handleOpenRecent(p)}
+                      className="flex flex-1 items-center gap-3 min-w-0 text-left"
+                    >
+                      <span className="text-[var(--color-muted)] transition-colors group-hover:text-[var(--color-claude)]">
+                        <FolderIcon />
                       </span>
-                      <span className="block truncate font-mono text-[11px] text-[var(--color-muted)]">
-                        {tildify(p.workspace)}
+                      <span className="flex-1 truncate">
+                        <span className="block truncate text-[13px] font-medium text-[var(--color-text)]">
+                          {p.name}
+                        </span>
+                        <span className="block truncate font-mono text-[11px] text-[var(--color-muted)]">
+                          {tildify(p.workspace)}
+                        </span>
                       </span>
-                    </span>
-                    {p.last_opened_at && (
-                      <span className="shrink-0 font-mono text-[10px] uppercase tracking-wider text-[var(--color-muted)]">
-                        {formatRelative(p.last_opened_at)}
-                      </span>
-                    )}
-                  </button>
+                      {p.last_opened_at && (
+                        <span className="shrink-0 font-mono text-[10px] uppercase tracking-wider text-[var(--color-muted)]">
+                          {formatRelative(p.last_opened_at)}
+                        </span>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setPendingDelete(p);
+                      }}
+                      aria-label={`Delete project ${p.name}`}
+                      title="Delete project"
+                      className="shrink-0 rounded p-1 text-[var(--color-muted)] opacity-0 transition-all group-hover:opacity-100 hover:bg-[var(--color-bg-2)] hover:text-[var(--color-danger)] focus:opacity-100 focus:outline-none"
+                    >
+                      <TrashIcon />
+                    </button>
+                  </div>
                 </li>
               ))}
             </ul>
@@ -147,6 +172,23 @@ export function ProjectPicker({ onOpen }: Props) {
             setModal(null);
             onOpen(project);
           }}
+        />
+      )}
+
+      {pendingDelete && (
+        <ConfirmModal
+          title="Delete project"
+          body={
+            <span>
+              Delete project{' '}
+              <span className="font-mono text-[var(--color-text)]">'{pendingDelete.name}'</span>?
+              Topics in this project become orphaned but their transcripts remain. This cannot be undone.
+            </span>
+          }
+          confirmLabel="Delete project"
+          confirmingLabel="Deleting..."
+          onConfirm={handleConfirmDelete}
+          onClose={() => setPendingDelete(null)}
         />
       )}
     </div>
@@ -213,6 +255,28 @@ function ChevronRightIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-[var(--color-muted)] transition-transform group-hover:translate-x-0.5" aria-hidden="true">
       <path d="M9 6l6 6-6 6" />
+    </svg>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M3 6h18" />
+      <path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" />
+      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+      <path d="M10 11v6" />
+      <path d="M14 11v6" />
     </svg>
   );
 }

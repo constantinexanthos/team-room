@@ -4,6 +4,7 @@ import type { Project, Topic } from '@/api/types';
 import { Sidebar } from './Sidebar';
 import { ProjectHeader } from './ProjectHeader';
 import { NewTopicModal } from './NewTopicModal';
+import { ProjectSettingsModal } from './ProjectSettingsModal';
 import { TopicView } from './TopicView';
 
 interface Props {
@@ -14,26 +15,43 @@ interface Props {
 const REFRESH_MS = 5000;
 
 export function ProjectView({ project, onClose }: Props) {
+  // Project metadata can be mutated locally (rename, workspace move, GitHub
+  // URL update) via the settings modal. Keep our own copy so the header and
+  // sidebar refresh without waiting on the parent.
+  const [activeProject, setActiveProject] = useState<Project>(project);
   const [topics, setTopics] = useState<Topic[]>([]);
   const [activeTopicId, setActiveTopicId] = useState<string | null>(null);
   const [isNewTopicModalOpen, setNewTopicModalOpen] = useState(false);
+  const [isSettingsOpen, setSettingsOpen] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const aliveRef = useRef(true);
 
+  // If the caller swaps in a different project, drop our overrides.
+  useEffect(() => {
+    setActiveProject(project);
+  }, [project]);
+
   const fetchTopics = useCallback(async (): Promise<Topic[] | null> => {
     try {
-      const { topics: fetched } = await api.getProject(project.id);
+      const { project: fetchedProject, topics: fetched } = await api.getProject(activeProject.id);
       if (!aliveRef.current) return null;
+      // Reconcile project metadata from the server (cheap; same request).
+      setActiveProject(fetchedProject);
       setTopics(fetched);
       setLoadError(null);
       return fetched;
     } catch (err) {
       if (!aliveRef.current) return null;
+      // Project itself was deleted (e.g. from another window/tab) — bail to picker.
+      if (err instanceof ApiError && err.status === 404) {
+        onClose();
+        return null;
+      }
       const message = err instanceof ApiError ? err.message : String(err);
       setLoadError(message);
       return null;
     }
-  }, [project.id]);
+  }, [activeProject.id, onClose]);
 
   useEffect(() => {
     aliveRef.current = true;
@@ -60,26 +78,49 @@ export function ProjectView({ project, onClose }: Props) {
     setActiveTopicId(found?.id ?? newTopicName);
   }
 
+  function handleTopicDeleted(deletedTopicId: string) {
+    // Drop locally so the row disappears immediately — refetch reconciles.
+    setTopics((prev) => prev.filter((t) => t.id !== deletedTopicId));
+    setActiveTopicId((current) => (current === deletedTopicId ? null : current));
+    void fetchTopics();
+  }
+
   function handleOpenSettings() {
-    // Settings modal lives in a sibling task — leave a placeholder hook.
-    // For now this is a no-op so the button doesn't dead-end the user.
-    window.alert('Project settings — coming soon');
+    setSettingsOpen(true);
+  }
+
+  async function handleProjectUpdated(updated: Project) {
+    setActiveProject(updated);
+    // If the workspace path moved, the server-side state needs a re-open so
+    // subsequent topic creation/cwd lookups land in the right place.
+    try {
+      const refreshed = await api.openProject(updated.id);
+      setActiveProject(refreshed);
+    } catch {
+      // Non-fatal — the metadata patch already succeeded.
+    }
+    void fetchTopics();
+  }
+
+  function handleProjectDeleted() {
+    onClose();
   }
 
   return (
     <div className="flex h-full">
       <Sidebar
-        project={project}
+        project={activeProject}
         topics={topics}
         activeTopicId={activeTopicId}
         onSelectTopic={setActiveTopicId}
         onCloseProject={onClose}
         onNewTopic={handleNewTopic}
+        onTopicDeleted={handleTopicDeleted}
       />
 
       <main className="flex min-w-0 flex-1 flex-col">
         <ProjectHeader
-          project={project}
+          project={activeProject}
           topic={activeTopic}
           onOpenSettings={handleOpenSettings}
         />
@@ -92,7 +133,7 @@ export function ProjectView({ project, onClose }: Props) {
 
         <div className="min-h-0 flex-1">
           {activeTopic ? (
-            <TopicView topic={activeTopic} project={project} />
+            <TopicView topic={activeTopic} project={activeProject} />
           ) : (
             <EmptyState
               hasTopics={topics.length > 0}
@@ -104,9 +145,18 @@ export function ProjectView({ project, onClose }: Props) {
 
       {isNewTopicModalOpen && (
         <NewTopicModal
-          projectId={project.id}
+          projectId={activeProject.id}
           onClose={() => setNewTopicModalOpen(false)}
           onCreated={handleTopicCreated}
+        />
+      )}
+
+      {isSettingsOpen && (
+        <ProjectSettingsModal
+          project={activeProject}
+          onClose={() => setSettingsOpen(false)}
+          onUpdated={handleProjectUpdated}
+          onDeleted={handleProjectDeleted}
         />
       )}
     </div>

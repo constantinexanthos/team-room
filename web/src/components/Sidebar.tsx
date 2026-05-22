@@ -1,7 +1,10 @@
+import { useState } from 'react';
+import { api, ApiError } from '@/api/client';
 import type { Project, Topic, AgentRole } from '@/api/types';
 import { cx, tildify } from '@/lib/utils';
 import { Brand } from './Brand';
 import { AgentLogo } from './AgentLogo';
+import { ConfirmModal } from './ConfirmModal';
 
 interface Props {
   project: Project;
@@ -10,6 +13,7 @@ interface Props {
   onSelectTopic: (topicId: string) => void;
   onCloseProject: () => void;
   onNewTopic: () => void;
+  onTopicDeleted: (topicId: string) => void;
 }
 
 const ROLE_VAR: Record<AgentRole, string> = {
@@ -26,7 +30,25 @@ export function Sidebar({
   onSelectTopic,
   onCloseProject,
   onNewTopic,
+  onTopicDeleted,
 }: Props) {
+  const [pendingDelete, setPendingDelete] = useState<Topic | null>(null);
+
+  async function handleConfirmDelete() {
+    if (!pendingDelete) return;
+    const targetId = pendingDelete.id;
+    try {
+      await api.deleteTopic(targetId);
+    } catch (err) {
+      // Re-throw so ConfirmModal can render the error and keep itself open.
+      if (err instanceof ApiError) throw err;
+      throw err;
+    }
+    // Success — close the modal and let the parent reconcile state.
+    setPendingDelete(null);
+    onTopicDeleted(targetId);
+  }
+
   return (
     <aside className="flex h-full w-[272px] shrink-0 flex-col border-r border-[var(--color-border)] bg-[var(--color-bg-2)]">
       {/* Brand + back-to-projects nav */}
@@ -98,29 +120,45 @@ export function Sidebar({
               const inFlight = t.status && t.status !== 'idle' && t.status !== 'crashed';
               return (
                 <li key={t.id}>
-                  <button
-                    type="button"
-                    onClick={() => onSelectTopic(t.id)}
+                  <div
                     data-active={active ? 'true' : 'false'}
                     className={cx(
-                      'topic-item group flex w-full items-center gap-2 rounded-md pl-3 pr-2 py-1.5 text-left text-[13px]',
+                      'topic-item group flex w-full items-center gap-2 rounded-md pl-3 pr-1.5 py-1.5 text-[13px]',
                       active
                         ? 'bg-[var(--color-bg-3)] text-[var(--color-text)]'
                         : 'text-[var(--color-text)]/80 hover:bg-[var(--color-bg-3)]/60 hover:text-[var(--color-text)]',
                     )}
                   >
-                    <span className="flex-1 truncate font-medium" title={t.id}>
-                      {t.id}
-                    </span>
-                    {inFlight && (
-                      <span
-                        className="heartbeat inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--color-costa)] shadow-[0_0_8px_var(--color-costa)]"
-                        title={t.status}
-                        aria-label={t.status ?? 'in-flight'}
-                      />
-                    )}
-                    {t.last_role && <RolePill role={t.last_role} />}
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => onSelectTopic(t.id)}
+                      className="flex flex-1 items-center gap-2 min-w-0 text-left"
+                    >
+                      <span className="flex-1 truncate font-medium" title={t.id}>
+                        {t.id}
+                      </span>
+                      {inFlight && (
+                        <span
+                          className="heartbeat inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--color-costa)] shadow-[0_0_8px_var(--color-costa)]"
+                          title={t.status}
+                          aria-label={t.status ?? 'in-flight'}
+                        />
+                      )}
+                      {t.last_role && <RolePill role={t.last_role} />}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setPendingDelete(t);
+                      }}
+                      aria-label={`Delete topic ${t.id}`}
+                      title="Delete topic"
+                      className="shrink-0 rounded p-1 text-[var(--color-muted)] opacity-0 transition-all group-hover:opacity-100 hover:bg-[var(--color-bg)] hover:text-[var(--color-danger)] focus:opacity-100 focus:outline-none"
+                    >
+                      <TrashIcon />
+                    </button>
+                  </div>
                 </li>
               );
             })}
@@ -141,7 +179,46 @@ export function Sidebar({
           New topic
         </button>
       </div>
+
+      {pendingDelete && (
+        <ConfirmModal
+          title="Delete topic"
+          body={
+            <span>
+              Delete topic{' '}
+              <span className="font-mono text-[var(--color-text)]">'{pendingDelete.id}'</span>?
+              The transcript, state, and workspace metadata will be removed. This cannot be undone.
+            </span>
+          }
+          confirmLabel="Delete topic"
+          confirmingLabel="Deleting..."
+          onConfirm={handleConfirmDelete}
+          onClose={() => setPendingDelete(null)}
+        />
+      )}
     </aside>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M3 6h18" />
+      <path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" />
+      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+      <path d="M10 11v6" />
+      <path d="M14 11v6" />
+    </svg>
   );
 }
 

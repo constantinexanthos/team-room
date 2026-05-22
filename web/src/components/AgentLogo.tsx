@@ -27,11 +27,13 @@ interface MarkProps {
 }
 
 /**
- * Anthropic Claude mark — stylized asymmetric "C/A" sunburst.
+ * Anthropic Claude mark — asymmetric radial burst.
  *
- * Simplified geometric interpretation of the Claude glyph using a small
- * grid of radial strokes — readable even at 12px, no dependency on a
- * complex path that doesn't anti-alias well at small sizes.
+ * Nine strokes radiate from the center with varied angles and lengths,
+ * matching the visual rhythm of the Anthropic Claude glyph: not a uniform
+ * starburst, deliberately asymmetric, longer rays in some directions and
+ * shorter in others. Drawn with rounded line caps so it reads as a brand
+ * mark at any size from 10px up.
  */
 function ClaudeMark({ size, className, title }: MarkProps) {
   return (
@@ -46,18 +48,23 @@ function ClaudeMark({ size, className, title }: MarkProps) {
       aria-label={title}
     >
       <title>{title}</title>
-      <g stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
-        {/* Horizontal-ish "burst" lines, characteristic of the Claude/Anthropic glyph */}
-        <line x1="3.5" y1="7.5" x2="11" y2="9" />
-        <line x1="3" y1="12" x2="11.5" y2="12" />
-        <line x1="3.5" y1="16.5" x2="11" y2="15" />
-        <line x1="6" y1="4" x2="11" y2="9.5" />
-        <line x1="6" y1="20" x2="11" y2="14.5" />
-        <line x1="13" y1="9" x2="20.5" y2="7.5" />
-        <line x1="12.5" y1="12" x2="21" y2="12" />
-        <line x1="13" y1="15" x2="20.5" y2="16.5" />
-        <line x1="13" y1="9.5" x2="18" y2="4" />
-        <line x1="13" y1="14.5" x2="18" y2="20" />
+      <g
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        {/* Nine radial strokes from center (12,12), varying length + angle,
+            deliberately asymmetric. */}
+        <line x1="12" y1="12" x2="12.70" y2="4.03" />
+        <line x1="12" y1="12" x2="16.98" y2="7.82" />
+        <line x1="12" y1="12" x2="21.46" y2="12.83" />
+        <line x1="12" y1="12" x2="17.36" y2="16.50" />
+        <line x1="12" y1="12" x2="13.04" y2="17.91" />
+        <line x1="12" y1="12" x2="6.84" y2="19.37" />
+        <line x1="12" y1="12" x2="4.01" y2="14.91" />
+        <line x1="12" y1="12" x2="5.20" y2="8.83" />
+        <line x1="12" y1="12" x2="7.99" y2="3.39" />
       </g>
     </svg>
   );

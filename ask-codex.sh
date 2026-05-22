@@ -10,9 +10,16 @@
 #
 # In Mode B, the script:
 #   - Reads the full prompt from stdin (multi-KB transcripts OK)
-#   - Invokes `codex exec --sandbox read-only -c model_reasoning_effort=high` in --cwd
+#   - Invokes `codex exec --sandbox read-only --json -c model_reasoning_effort=high`
+#     so we can drop the final agent_message into a sidecar partial file. Codex's
+#     --json output does NOT stream individual tokens — it emits a single
+#     `item.completed` event with the full agent_message at the END of the turn.
+#     So the streaming UX win for codex is marginal (the partial file lands a
+#     fraction of a second before the JSONL append), but it keeps the per-turn
+#     partial-file protocol symmetric with claude.
 #   - Appends ONLY the response to <topic>.jsonl with `round` and `prompt_id` set
 #   - Does NOT log the prompt (orchestrator already has it in JSONL)
+#   - Deletes the partial sidecar file on completion / failure
 
 set -euo pipefail
 
@@ -53,16 +60,73 @@ if [[ "${1:-}" == "--orchestrate" ]]; then
 
   mkdir -p "$ROOM_DIR"
   TRANSCRIPT="$ROOM_DIR/$TOPIC.jsonl"
+  PARTIAL_FILE="$ROOM_DIR/$TOPIC.partial.$PROMPT_ID.$ROUND.txt"
+  RESPONSE_FILE="$(mktemp -t ask-codex-resp.XXXXXX)"
+  STDERR_FILE="$(mktemp -t ask-codex-stderr.XXXXXX)"
   PROMPT="$(cat)"
 
-  STDERR_FILE="$(mktemp -t ask-codex-stderr.XXXXXX)"
-  trap 'rm -f "$STDERR_FILE"' EXIT
-  # set +e: pipefail would kill the script before we reach the error reporting.
+  cleanup_partial() {
+    rm -f "$PARTIAL_FILE" "$RESPONSE_FILE" "$STDERR_FILE" 2>/dev/null || true
+  }
+  trap cleanup_partial EXIT
+
+  # Reset partial file (in case a previous attempt left a stale one).
+  : > "$PARTIAL_FILE"
+
+  # Use `--json` so we can read agent_message items as they complete. Codex
+  # batches the message at the end (no incremental token deltas), so the
+  # partial file gets populated in one write near completion — but at least
+  # the protocol is symmetric with claude.
+  export TEAM_ROOM_PARTIAL_FILE="$PARTIAL_FILE"
+  export TEAM_ROOM_RESPONSE_FILE="$RESPONSE_FILE"
   set +e
-  RESPONSE="$(printf '%s' "$PROMPT" | (cd "$CWD" && codex exec --sandbox read-only --skip-git-repo-check -c "model_reasoning_effort=$EFFORT" 2>"$STDERR_FILE"))"
-  CODEX_EXIT=$?
+  printf '%s' "$PROMPT" \
+    | (cd "$CWD" && codex exec --sandbox read-only --skip-git-repo-check --json \
+        -c "model_reasoning_effort=$EFFORT" 2>"$STDERR_FILE") \
+    | python3 -u -c '
+import json, os, sys
+
+partial_path = os.environ["TEAM_ROOM_PARTIAL_FILE"]
+response_path = os.environ["TEAM_ROOM_RESPONSE_FILE"]
+
+# Track the final agent_message text (codex emits one or more `item.completed`
+# events; we keep the last agent_message one, matching codex exec text output).
+final_text = ""
+
+with open(partial_path, "a", buffering=1, encoding="utf-8") as partial_fh:
+    for raw in sys.stdin:
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            obj = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if obj.get("type") == "item.completed":
+            item = obj.get("item") or {}
+            if item.get("type") == "agent_message":
+                text = item.get("text") or ""
+                if text:
+                    final_text = text
+                    # Truncate + rewrite (codex sends the full message at once,
+                    # so this populates the partial file with the final text in
+                    # a single write near the end of the turn).
+                    partial_fh.seek(0)
+                    partial_fh.truncate()
+                    partial_fh.write(text)
+                    partial_fh.flush()
+                    try:
+                        os.fsync(partial_fh.fileno())
+                    except OSError:
+                        pass
+
+with open(response_path, "w", encoding="utf-8") as fh:
+    fh.write(final_text)
+'
+  PIPE_STATUSES=("${PIPESTATUS[@]}")
+  CODEX_EXIT="${PIPE_STATUSES[0]:-1}"
+  PARSER_EXIT="${PIPE_STATUSES[1]:-1}"
   set -e
-  RESPONSE="$(printf '%s' "$RESPONSE" | awk 'NF {p=1} p {print}' | sed -e :a -e '/^$/{$d;N;ba' -e '}')"
 
   if [[ $CODEX_EXIT -ne 0 ]]; then
     echo "codex exec exited $CODEX_EXIT" >&2
@@ -71,6 +135,14 @@ if [[ "${1:-}" == "--orchestrate" ]]; then
     echo >&2
     exit 1
   fi
+  if [[ $PARSER_EXIT -ne 0 ]]; then
+    echo "codex stream-json parser exited $PARSER_EXIT" >&2
+    exit 1
+  fi
+
+  RESPONSE="$(cat "$RESPONSE_FILE")"
+  RESPONSE="$(printf '%s' "$RESPONSE" | awk 'NF {p=1} p {print}' | sed -e :a -e '/^$/{$d;N;ba' -e '}')"
+
   if [[ -z "$RESPONSE" ]]; then
     echo "codex returned empty response (exit 0)" >&2
     if [[ -s "$STDERR_FILE" ]]; then

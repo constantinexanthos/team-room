@@ -1,5 +1,6 @@
 import type { Message } from '@/api/types';
 import { formatTime, cx } from '@/lib/utils';
+import { Markdown } from '@/lib/markdown';
 import { AgentLogo } from './AgentLogo';
 
 interface Props {
@@ -47,9 +48,9 @@ export function MessageBubble({ message }: Props) {
         )}
         <span className="ml-auto font-mono text-[10px] tracking-normal">{formatTime(message.ts)}</span>
       </div>
-      <pre className="m-0 whitespace-pre-wrap break-words font-mono text-[13px] leading-relaxed text-[var(--color-text)]">
-        {message.content}
-      </pre>
+      <div className="markdown-body text-[13px] leading-relaxed text-[var(--color-text)]">
+        <Markdown source={message.content} />
+      </div>
     </div>
   );
 }

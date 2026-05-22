@@ -10,9 +10,13 @@
 #
 # In Mode B, the script:
 #   - Reads the full prompt from stdin (multi-KB transcripts OK)
-#   - Invokes `claude --print --disallowedTools "Write Edit Bash NotebookEdit"` in --cwd
-#   - Appends ONLY the response to <topic>.jsonl with `round` and `prompt_id` set
+#   - Invokes `claude --print --output-format stream-json --include-partial-messages`
+#     so token-level deltas can be teed to a sidecar `<topic>.partial.<prompt_id>.<round>.txt`
+#     file for the UI to poll. Final assembled response is read from the trailing
+#     `{"type":"result",...}` event (or assembled from text_deltas as a fallback).
+#   - Appends ONLY the final response to <topic>.jsonl with `round` and `prompt_id` set
 #   - Does NOT log the prompt (orchestrator already has it in JSONL)
+#   - Deletes the partial sidecar file on completion / failure
 
 set -euo pipefail
 
@@ -52,26 +56,101 @@ if [[ "${1:-}" == "--orchestrate" ]]; then
 
   mkdir -p "$ROOM_DIR"
   TRANSCRIPT="$ROOM_DIR/$TOPIC.jsonl"
+  PARTIAL_FILE="$ROOM_DIR/$TOPIC.partial.$PROMPT_ID.$ROUND.txt"
+  RESPONSE_FILE="$(mktemp -t ask-claude-resp.XXXXXX)"
+  STDERR_FILE="$(mktemp -t ask-claude-stderr.XXXXXX)"
   PROMPT="$(cat)"
 
-  # Capture claude stderr to a temp file so failures can be surfaced (not swallowed).
-  STDERR_FILE="$(mktemp -t ask-claude-stderr.XXXXXX)"
-  trap 'rm -f "$STDERR_FILE"' EXIT
-  # Disable set -e for the critical block: pipefail would kill us before we
-  # capture the exit code, so the stderr reporting below would never fire.
-  set +e
-  RESPONSE="$(printf '%s' "$PROMPT" | (cd "$CWD" && claude --print --disallowedTools "Write Edit Bash NotebookEdit" 2>"$STDERR_FILE"))"
-  CLAUDE_EXIT=$?
-  set -e
-  RESPONSE="$(printf '%s' "$RESPONSE" | awk 'NF {p=1} p {print}' | sed -e :a -e '/^$/{$d;N;ba' -e '}')"
+  # Ensure we always tidy up temp + partial sidecar files, even on early exit.
+  cleanup_partial() {
+    rm -f "$PARTIAL_FILE" "$RESPONSE_FILE" "$STDERR_FILE" 2>/dev/null || true
+  }
+  trap cleanup_partial EXIT
 
-  if [[ $CLAUDE_EXIT -ne 0 ]]; then
+  # Reset partial file (in case a previous attempt left a stale one).
+  : > "$PARTIAL_FILE"
+
+  # Stream-JSON consumer: each line of claude's stream-json output is parsed
+  # by python3, which appends text_delta tokens to the partial file as they
+  # arrive. The final response is written to RESPONSE_FILE. This keeps the
+  # bash side simple and avoids running awk/jq for every token.
+  export TEAM_ROOM_PARTIAL_FILE="$PARTIAL_FILE"
+  export TEAM_ROOM_RESPONSE_FILE="$RESPONSE_FILE"
+  set +e
+  printf '%s' "$PROMPT" \
+    | (cd "$CWD" && claude --print \
+        --output-format stream-json \
+        --include-partial-messages \
+        --verbose \
+        --disallowedTools "Write Edit Bash NotebookEdit" \
+        2>"$STDERR_FILE") \
+    | python3 -u -c '
+import json, os, sys
+
+partial_path = os.environ["TEAM_ROOM_PARTIAL_FILE"]
+response_path = os.environ["TEAM_ROOM_RESPONSE_FILE"]
+
+# Open partial file in append mode (created empty by the bash caller).
+parts = []
+final_result = None
+
+with open(partial_path, "a", buffering=1, encoding="utf-8") as partial_fh:
+    for raw in sys.stdin:
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            obj = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        t = obj.get("type")
+        if t == "stream_event":
+            ev = obj.get("event") or {}
+            if ev.get("type") == "content_block_delta":
+                delta = ev.get("delta") or {}
+                if delta.get("type") == "text_delta":
+                    chunk = delta.get("text") or ""
+                    if chunk:
+                        parts.append(chunk)
+                        partial_fh.write(chunk)
+                        partial_fh.flush()
+                        try:
+                            os.fsync(partial_fh.fileno())
+                        except OSError:
+                            pass
+        elif t == "result":
+            final_result = obj.get("result")
+
+# Prefer the canonical `result.result` text (already-trimmed); fall back to
+# the assembled text_deltas if for some reason the result event was missing.
+text = final_result if isinstance(final_result, str) and final_result else "".join(parts)
+with open(response_path, "w", encoding="utf-8") as fh:
+    fh.write(text)
+'
+  # PIPESTATUS reflects [claude_exit, python_exit] when set +e and pipefail-off.
+  # Either failing should be treated as an error. Snapshot the whole array
+  # into a local array so we don't re-read PIPESTATUS twice (which under
+  # `set -u` after a prior expansion can read as unbound).
+  PIPE_STATUSES=("${PIPESTATUS[@]}")
+  CLAUDE_EXIT="${PIPE_STATUSES[0]:-1}"
+  PARSER_EXIT="${PIPE_STATUSES[1]:-1}"
+  set -e
+
+  if [[ "$CLAUDE_EXIT" -ne 0 ]]; then
     echo "claude --print exited $CLAUDE_EXIT" >&2
     echo "--- claude stderr ---" >&2
     head -c 4000 "$STDERR_FILE" >&2 || true
     echo >&2
     exit 1
   fi
+  if [[ "$PARSER_EXIT" -ne 0 ]]; then
+    echo "stream-json parser exited $PARSER_EXIT" >&2
+    exit 1
+  fi
+
+  RESPONSE="$(cat "$RESPONSE_FILE")"
+  RESPONSE="$(printf '%s' "$RESPONSE" | awk 'NF {p=1} p {print}' | sed -e :a -e '/^$/{$d;N;ba' -e '}')"
+
   if [[ -z "$RESPONSE" ]]; then
     echo "claude returned empty response (exit 0)" >&2
     if [[ -s "$STDERR_FILE" ]]; then
