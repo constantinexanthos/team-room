@@ -1,7 +1,7 @@
 ---
 description: Check the status of a team-room iteration (in-flight, idle, crashed)
 argument-hint: '<topic-id>'
-allowed-tools: mcp__team-room__team_room.status
+allowed-tools: mcp__team-room__team_room_status
 ---
 
 The user wants to check the status of a specific team-room topic.
@@ -11,7 +11,7 @@ Topic id (lowercase + hyphens):
 
 Steps:
 1. Take the topic id from `$ARGUMENTS`. If empty, ask the user which topic.
-2. Call `team_room.status` with that topic id.
+2. Call `team_room_status` with that topic id.
 3. Present the result naturally:
    - `idle` — no iteration in flight, you can fire a new one
    - `dialogue` — live dialogue running; surface `turn N/M (current_agent thinking…)` and the prompt_id

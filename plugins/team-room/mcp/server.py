@@ -5,10 +5,10 @@ Exposes the team-room dialogue capability as MCP tools so any Claude Code
 session (or any MCP-aware agent) can call it natively.
 
 Tools:
-  team_room.ask    — fire a dialogue and (optionally) wait for the result
-  team_room.status — get current iteration state for a topic
-  team_room.recent — list recent topics
-  team_room.cancel — cancel an in-flight iteration
+  team_room_ask    — fire a dialogue and (optionally) wait for the result
+  team_room_status — get current iteration state for a topic
+  team_room_recent — list recent topics
+  team_room_cancel — cancel an in-flight iteration
 
 The server reuses the orchestrator scripts that live next to it in the
 plugin install:
@@ -271,7 +271,7 @@ def tool_ask(args: dict) -> dict:
         return {
             "session": {"topic": topic, "prompt_id": prompt_id},
             "status": "timeout",
-            "warning": f"iteration still running after {timeout}s; poll team_room.status",
+            "warning": f"iteration still running after {timeout}s; poll team_room_status",
         }
 
     # Pull messages for this iteration only
@@ -323,7 +323,7 @@ def tool_cancel(args: dict) -> dict:
 
 
 TOOLS = {
-    "team_room.ask": {
+    "team_room_ask": {
         "description": (
             "Open a working session: Claude and Codex deliberate on your question "
             "together over multiple short turns, then return a structured transcript. "
@@ -344,7 +344,7 @@ TOOLS = {
             "required": ["question"],
         },
     },
-    "team_room.status": {
+    "team_room_status": {
         "description": "Get current iteration state for a topic — useful while wait=false sessions are running.",
         "inputSchema": {
             "type": "object",
@@ -352,14 +352,14 @@ TOOLS = {
             "required": ["topic"],
         },
     },
-    "team_room.recent": {
+    "team_room_recent": {
         "description": "List recent topics by last-modified time. Useful to find an existing topic to continue.",
         "inputSchema": {
             "type": "object",
             "properties": {"limit": {"type": "integer", "default": 10}},
         },
     },
-    "team_room.cancel": {
+    "team_room_cancel": {
         "description": "Cancel an in-flight iteration on a topic. Sends SIGTERM to the orchestrator.",
         "inputSchema": {
             "type": "object",
@@ -371,10 +371,10 @@ TOOLS = {
 
 
 TOOL_FNS = {
-    "team_room.ask": tool_ask,
-    "team_room.status": tool_status,
-    "team_room.recent": tool_recent,
-    "team_room.cancel": tool_cancel,
+    "team_room_ask": tool_ask,
+    "team_room_status": tool_status,
+    "team_room_recent": tool_recent,
+    "team_room_cancel": tool_cancel,
 }
 
 
@@ -468,7 +468,7 @@ def handle(msg: dict) -> dict | None:
 def main() -> int:
     stderr_log(f"team-room MCP server starting (room_dir={ROOM_DIR})")
     if not ORCHESTRATE.exists():
-        stderr_log(f"WARNING: orchestrate.py not found at {ORCHESTRATE}; team_room.ask will fail")
+        stderr_log(f"WARNING: orchestrate.py not found at {ORCHESTRATE}; team_room_ask will fail")
 
     while True:
         msg = read_message()

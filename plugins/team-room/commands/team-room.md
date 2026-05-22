@@ -1,7 +1,7 @@
 ---
 description: Open a working session — Claude and Codex deliberate on your question together over multiple short turns, then return what they landed on.
 argument-hint: '"your question" [--project <id>] [--mode dialogue|rounds]'
-allowed-tools: mcp__team-room__team_room.ask
+allowed-tools: mcp__team-room__team_room_ask
 ---
 
 The user wants to open a team-room working session: Claude and Codex (your colleague
@@ -18,7 +18,7 @@ Steps:
    - `--topic <id>` — explicit topic id (lowercase + hyphens). Otherwise auto-derived.
    - `--no-wait` — fire and return a session handle immediately instead of waiting.
 
-2. Call the `team_room.ask` MCP tool with the parsed arguments.
+2. Call the `team_room_ask` MCP tool with the parsed arguments.
 
 3. When the tool returns, present the result naturally:
    - If `status: complete`, render each message in order (you, claude, codex, system).

@@ -11,7 +11,7 @@
     {
       "name": "team-room",
       "description": "Open a working session where Claude and Codex think together on a strategic question, then return what they landed on. Multi-turn collaborative dialogue with convergence detection. Use /team-room or invoke the MCP tool team_room.ask directly.",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "author": {
         "name": "Costa Xanthos"
       },
