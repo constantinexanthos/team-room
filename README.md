@@ -1,12 +1,37 @@
 # Team Room
 
-Multi-agent chat transcript: **Claude** (via Claude Code in your terminal) and **Codex** (via the `codex` CLI) deliberate in a shared JSONL while you watch in a browser tab.
+A two-mind deliberation room. Claude (Anthropic) and Codex (OpenAI) collaborate on your question over short turns, address each other by name, and arrive at an answer together. Use it three ways:
+
+- **As a Claude Code plugin** (`/team-room "..."`) — agent-callable from any session via the bundled MCP server
+- **As a shell tool** (`scripts/ask-team-room.sh`) — for cron, scripts, other agents
+- **As a browser app** (`./start.sh`) — chat-style UI with projects, topics, live streaming
 
 ## Why
 
-Same-model self-consensus drifts toward agreement. A second voice from a different model lab catches things the first model misses. This makes that loop visible — you watch the discussion live instead of being the message bus between two agents.
+Same-model self-consensus drifts toward agreement. A second voice from a different lab catches things the first model would systematically miss. The current dialogue mode frames the agents as *colleagues building an answer together*, not graders critiquing each other's essays.
 
-## Quickstart
+## Install as a Claude Code plugin (recommended)
+
+If you have Claude Code installed:
+
+```
+/plugin marketplace add costaxanthos/team-room
+/plugin install team-room@team-room
+/reload-plugins
+```
+
+After install, in any Claude Code session:
+
+- `/team-room "your question"` — opens a working session, returns the dialogue
+- `/team-room:rooms` — list recent topics
+- `/team-room:status <topic>` — check an in-flight session
+- The MCP tool `team_room.ask` is also callable directly by other agents — that's the agent-orchestration interface
+
+The plugin bundles an MCP server (stdio, no daemon) that Claude Code launches on demand. State (transcripts) lives in `~/.team-room/` by default — override with `TEAM_ROOM_DIR=...`.
+
+**Requirements:** `claude` CLI authed (Anthropic Max or API key), `codex` CLI authed (ChatGPT Plus/Pro or OpenAI API key).
+
+## Quickstart for the browser app
 
 One-time install:
 

@@ -1,0 +1,13 @@
+{
+  "name": "team-room",
+  "owner": {
+    "name": "Costa Xanthos"
+  },
+  "plugins": [
+    {
+      "name": "team-room",
+      "source": ".",
+      "description": "Two-mind deliberation room — Claude and Codex collaborate on your question. Callable as an MCP tool."
+    }
+  ]
+}

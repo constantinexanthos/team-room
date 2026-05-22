@@ -83,6 +83,11 @@ Be ~{turn_words} words. Conversational, not formal. Don't try to close the quest
 turn 1 — open it. You and {other_agent} will trade turns until you've genuinely landed
 somewhere together.
 
+You have read-only access to the workspace. If the question is grounded in code or files
+and you need evidence, spawn a sub-agent (Agent tool) to investigate — one read-only
+research task per turn is fine. Cite file:line in your response. Don't guess when you
+can look.
+
 Costa's question and the conversation so far:
 {full_transcript}
 
@@ -117,6 +122,10 @@ debater. Address {other_agent} by name when you respond to a specific thing they
 
 Be ~{turn_words} words. Conversational. You're not writing for an audience — you're
 talking to {other_agent} and to Costa.
+
+You have read-only access to the workspace. If you need evidence to back what you're
+saying, spawn a sub-agent (Agent tool) for one read-only research task — grep for usage,
+read a config, count occurrences. Cite file:line. Don't guess when you can look.
 
 The session so far:
 {full_transcript}

@@ -1,0 +1,8 @@
+{
+  "name": "team-room",
+  "version": "0.1.0",
+  "description": "Two-mind deliberation room — Claude and Codex collaborate on a question together while you watch. Callable as an MCP tool by any agent.",
+  "author": {
+    "name": "Costa Xanthos"
+  }
+}
