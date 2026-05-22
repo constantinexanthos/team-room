@@ -217,11 +217,69 @@ def ensure_topic(topic_id: str, project_id: str | None, workspace: str | None) -
 # Tool implementations
 # ---------------------------------------------------------------------------
 
-def tool_ask(args: dict) -> dict:
-    """Fire a dialogue and (optionally) wait for the result."""
+def emit_progress(progress_token: Any, progress: float, total: float | None, message: str) -> None:
+    """Send a `notifications/progress` JSON-RPC notification to the client.
+
+    Per MCP spec (2025-11-25/basic/utilities/progress):
+      - progressToken must match an active request's token
+      - progress MUST increase monotonically (we enforce via counter)
+      - total is optional
+      - message SHOULD be human-readable
+      - notifications MUST stop after completion
+    No-op if progress_token is None (client didn't request progress)."""
+    if progress_token is None:
+        return
+    params: dict = {
+        "progressToken": progress_token,
+        "progress": progress,
+    }
+    if total is not None:
+        params["total"] = total
+    if message:
+        params["message"] = message
+    write_message({
+        "jsonrpc": "2.0",
+        "method": "notifications/progress",
+        "params": params,
+    })
+
+
+def _progress_for_dialogue(state: dict) -> tuple[float, float, str]:
+    """Map a dialogue-mode state.json snapshot to (progress, total, message).
+
+    Progress is fractional: turn N composing = N - 0.5, turn N done = N.
+    This keeps the counter monotonic across the (start-of-turn, end-of-turn)
+    transitions and surfaces both 'X is composing' and 'X is done, Y up next'.
+    """
+    turn = state.get("turn") or 0
+    max_turns = state.get("max_turns") or 8
+    agent = (state.get("current_agent") or "?").capitalize()
+    return (max(0.5, float(turn) - 0.5), float(max_turns),
+            f"{agent} composing turn {turn} of {max_turns}")
+
+
+def _progress_for_rounds(state: dict) -> tuple[float, float, str]:
+    status = state.get("status") or ""
+    if status == "round-1":
+        return 0.5, 2.0, "Round 1: both agents writing first-take in parallel"
+    if status == "round-2":
+        return 1.5, 2.0, "Round 2: each agent critiquing the other"
+    return 0.0, 2.0, f"Status: {status}"
+
+
+def tool_ask(args: dict, _meta: dict | None = None) -> dict:
+    """Fire a dialogue and (optionally) wait for the result.
+
+    When _meta.progressToken is set by the client (per MCP progress spec),
+    emits `notifications/progress` notifications as the orchestrator advances
+    through turns — solves the 'silent middle' between team_room_ask and
+    final_brief that v0.2 dog-fooding flagged as the biggest first-use gap.
+    """
     question = args.get("question") or ""
     if not question.strip():
         return {"error": "question is required"}
+
+    progress_token = (_meta or {}).get("progressToken")
 
     project_id = args.get("project_id")
     explicit_topic = args.get("topic")
@@ -287,19 +345,50 @@ def tool_ask(args: dict) -> dict:
             "status": "in_flight",
         }
 
-    # Wait for completion (poll state.status -> idle)
+    # Wait for completion (poll state.status -> idle). Emit MCP progress
+    # notifications on every state transition if the client requested them,
+    # so the silent middle gets a heartbeat (each turn boundary fires a
+    # notification with `Codex composing turn 3 of 8` etc.).
     deadline = time.time() + timeout
+    last_signature: tuple | None = None
+    progress_counter: float = 0.0  # MUST be monotonically increasing per spec
+    poll_interval = 0.5 if progress_token is not None else 2.0
     while time.time() < deadline:
         s = read_state(topic)
         if s.get("status") == "idle":
             break
-        time.sleep(2)
+        if progress_token is not None:
+            sig = (s.get("status"), s.get("turn"), s.get("current_agent"),
+                   s.get("claude_done"), s.get("codex_done"))
+            if sig != last_signature:
+                last_signature = sig
+                if mode == "dialogue":
+                    raw_progress, total, message = _progress_for_dialogue(s)
+                else:
+                    raw_progress, total, message = _progress_for_rounds(s)
+                # Enforce monotonic increase even if state regresses (defensive).
+                progress_counter = max(progress_counter + 0.01, raw_progress)
+                emit_progress(progress_token, progress_counter, total, message)
+        time.sleep(poll_interval)
     else:
+        if progress_token is not None:
+            emit_progress(progress_token, progress_counter + 1.0, None,
+                          f"timed out after {timeout}s; orchestrator still running")
         return {
             "session": {"topic": topic, "prompt_id": prompt_id},
             "status": "timeout",
             "warning": f"iteration still running after {timeout}s; poll team_room_status",
         }
+
+    # Final progress emission with the actual outcome so the client knows
+    # the room landed (vs. hit its wait-timeout). Spec: notifications MUST
+    # stop after completion — this is the last one for this token.
+    final_state_for_progress = read_state(topic)
+    final_outcome = final_state_for_progress.get("outcome") or "complete"
+    if progress_token is not None:
+        progress_counter = max(progress_counter + 1.0, float(final_state_for_progress.get("max_turns") or progress_counter))
+        emit_progress(progress_token, progress_counter, progress_counter,
+                      f"{final_outcome} — brief ready")
 
     # Pull messages for this iteration only
     messages = [m for m in read_transcript(topic) if m.get("prompt_id") == prompt_id]
@@ -509,11 +598,18 @@ def handle(msg: dict) -> dict | None:
     if method == "tools/call":
         name = params.get("name", "")
         args = params.get("arguments") or {}
+        meta = params.get("_meta") or {}
         fn = TOOL_FNS.get(name)
         if not fn:
             return jsonrpc_error(req_id, -32601, f"unknown tool: {name}")
         try:
-            result = fn(args)
+            # Tools that benefit from progress notifications opt-in via the
+            # _meta keyword. Tools without long waits (status/recent/cancel)
+            # ignore it.
+            if name == "team_room_ask":
+                result = fn(args, _meta=meta)
+            else:
+                result = fn(args)
         except Exception as e:
             stderr_log(f"tool {name} crashed: {e!r}")
             return jsonrpc_error(req_id, -32603, f"tool error: {e!r}")
