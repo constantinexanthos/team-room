@@ -15,7 +15,7 @@ Same-model self-consensus drifts toward agreement. A second voice from a differe
 If you have Claude Code installed:
 
 ```
-/plugin marketplace add costaxanthos/team-room
+/plugin marketplace add constantinexanthos/team-room
 /plugin install team-room@team-room
 /reload-plugins
 ```

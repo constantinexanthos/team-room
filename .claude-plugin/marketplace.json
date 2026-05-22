@@ -3,11 +3,19 @@
   "owner": {
     "name": "Costa Xanthos"
   },
+  "metadata": {
+    "description": "Two-mind deliberation room — Claude and Codex collaborate on your question. Agent-callable as an MCP tool.",
+    "version": "0.1.0"
+  },
   "plugins": [
     {
       "name": "team-room",
-      "source": ".",
-      "description": "Two-mind deliberation room — Claude and Codex collaborate on your question. Callable as an MCP tool."
+      "description": "Open a working session where Claude and Codex think together on a strategic question, then return what they landed on. Multi-turn collaborative dialogue with convergence detection. Use /team-room or invoke the MCP tool team_room.ask directly.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Costa Xanthos"
+      },
+      "source": "./plugins/team-room"
     }
   ]
 }
