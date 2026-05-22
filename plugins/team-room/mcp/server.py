@@ -383,32 +383,31 @@ TOOL_FNS = {
 # ---------------------------------------------------------------------------
 
 def read_message() -> dict | None:
-    """Read one LSP-style framed JSON-RPC message from stdin."""
-    headers: dict[str, str] = {}
+    """Read one newline-delimited JSON-RPC message from stdin.
+
+    MCP stdio transport (per spec): each message is a single line of UTF-8
+    JSON, terminated by '\\n'. No Content-Length headers, no embedded
+    newlines, no batches.
+    """
     while True:
         line = sys.stdin.buffer.readline()
         if not line:
             return None
-        s = line.decode("ascii", errors="replace").rstrip("\r\n")
-        if s == "":
-            break
-        if ":" in s:
-            k, _, v = s.partition(":")
-            headers[k.strip().lower()] = v.strip()
-    length = int(headers.get("content-length", "0"))
-    if length <= 0:
-        return None
-    body = sys.stdin.buffer.read(length)
-    try:
-        return json.loads(body.decode("utf-8"))
-    except json.JSONDecodeError:
-        return None
+        s = line.decode("utf-8", errors="replace").strip()
+        if not s:
+            continue
+        try:
+            return json.loads(s)
+        except json.JSONDecodeError as e:
+            stderr_log(f"ignoring malformed JSON line: {e}")
+            continue
 
 
 def write_message(msg: dict) -> None:
-    body = json.dumps(msg).encode("utf-8")
-    sys.stdout.buffer.write(f"Content-Length: {len(body)}\r\n\r\n".encode("ascii"))
-    sys.stdout.buffer.write(body)
+    # Compact (no indent, no embedded newlines) so the message is exactly one line.
+    body = json.dumps(msg, separators=(",", ":"), ensure_ascii=False)
+    sys.stdout.buffer.write(body.encode("utf-8"))
+    sys.stdout.buffer.write(b"\n")
     sys.stdout.buffer.flush()
 
 
