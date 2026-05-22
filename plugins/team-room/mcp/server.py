@@ -236,7 +236,13 @@ def tool_ask(args: dict) -> dict:
     prompt_id = secrets.token_hex(4)
     append_costa_message(topic, question, prompt_id)
 
-    # Spawn orchestrate.py detached
+    # Spawn orchestrate.py detached. We MUST pin TEAM_ROOM_DIR so orchestrate.py
+    # and the ask-claude.sh/ask-codex.sh it invokes write to the same dir the
+    # MCP server reads from. Their defaults differ (orchestrate.py defaults to
+    # $SCRIPT_DIR/.team-room, i.e. the plugin install dir) — without this, the
+    # prompt lands in ROOM_DIR while responses land in <plugin>/.team-room/.
+    child_env = os.environ.copy()
+    child_env["TEAM_ROOM_DIR"] = str(ROOM_DIR)
     log_fh = open(ROOM_DIR / f"{topic}.orchestrate.log", "a", encoding="utf-8")
     try:
         proc = subprocess.Popen(
@@ -248,6 +254,7 @@ def tool_ask(args: dict) -> dict:
             start_new_session=True,
             close_fds=True,
             cwd=str(ROOM_DIR),
+            env=child_env,
         )
     finally:
         log_fh.close()
