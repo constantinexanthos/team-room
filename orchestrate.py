@@ -23,6 +23,7 @@ import datetime
 import fcntl
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -40,6 +41,13 @@ ASK_CODEX = SCRIPT_DIR / "ask-codex.sh"
 # longer than 5min the first time. Overridable for testing via env.
 AGENT_TIMEOUT_S = int(os.environ.get("TEAM_ROOM_AGENT_TIMEOUT", "480"))
 
+# Live dialogue mode: max turns per iteration before forcing convergence.
+DIALOGUE_MAX_TURNS = int(os.environ.get("TEAM_ROOM_MAX_TURNS", "8"))
+
+# Word budget per micro-turn. Long enough to make a real point, short enough
+# to keep the dialogue feeling live and conversational.
+DIALOGUE_TURN_WORDS = int(os.environ.get("TEAM_ROOM_TURN_WORDS", "150"))
+
 
 # ---------- Prompt templates (verbatim from v2-design.md) ----------
 
@@ -52,6 +60,50 @@ Full conversation so far:
 {full_transcript}
 
 Respond to Costa's most recent message."""
+
+
+DIALOGUE_OPENING_PROMPT = """You are starting a live dialogue with another AI agent ({other_agent}).
+Costa (the human leading the room) just sent the question below. {other_agent} is in
+the room with you and will respond to your turn, then you'll respond to theirs.
+
+This is turn 1. Keep your response UNDER {turn_words} WORDS — short, sharp, conversational.
+This is dialogue, not an essay. End with either:
+  (a) a concrete position {other_agent} can react to, OR
+  (b) a sharp question that focuses the next turn.
+
+The goal is to think TOGETHER over many short turns, not write a long essay alone.
+Whatever you say, {other_agent} will see it and react. Then you'll see their reaction.
+Build incrementally toward a shared answer.
+
+If at some later turn you both clearly agree and there is nothing material left to add,
+either of you can write `# CONVERGED` followed by a one-line summary of the shared
+conclusion. The room will then close the iteration.
+
+Full conversation so far:
+{full_transcript}
+
+Respond to Costa's most recent message. Under {turn_words} words. Be concrete."""
+
+
+DIALOGUE_TURN_PROMPT = """You are in turn {turn_n} of a live dialogue with {other_agent}.
+{other_agent} just took their turn (visible at the end of the transcript). React to what
+they JUST said — quote or paraphrase the specific claim or question you're responding to.
+
+Your turn must do exactly one of:
+  - **Build:** extend their point with new evidence, examples, or a sharper formulation
+  - **Push back:** identify a specific weak claim, missed risk, or factual error
+  - **Sharpen:** restate the core question more precisely; isolate where you disagree
+  - **Converge:** if you genuinely agree and there is no material gap left, write
+    `# CONVERGED` on its own line, then a one-line summary of the shared conclusion.
+    Only converge with evidence — not as politeness.
+
+Keep your response UNDER {turn_words} WORDS. This is dialogue, not an essay. React directly
+to {other_agent}'s last turn — do not summarize the whole conversation.
+
+Full transcript so far:
+{full_transcript}
+
+Your turn ({turn_n} of {max_turns}). Under {turn_words} words."""
 
 
 R2_PROMPT = """You are participating in a team room with another AI agent ({other_agent}).
@@ -316,6 +368,119 @@ async def run_agent(
 # ---------- Round orchestration ----------
 
 
+CONVERGENCE_RE = re.compile(r"^\s*#\s*CONVERGED\b", re.MULTILINE | re.IGNORECASE)
+
+
+def _has_converged(content: str) -> bool:
+    """True if an agent's response declares convergence per the spec."""
+    return bool(CONVERGENCE_RE.search(content or ""))
+
+
+def _alternating_agent(turn_n: int) -> str:
+    """Turn 1 = claude, turn 2 = codex, alternating. Claude opens because the
+    user types in their terminal and Claude (this session) is their primary."""
+    return "claude" if turn_n % 2 == 1 else "codex"
+
+
+async def run_dialogue(
+    topic: str,
+    prompt_id: str,
+    cwd: str,
+    max_turns: int = DIALOGUE_MAX_TURNS,
+) -> bool:
+    """Live micro-turn dialogue: Claude and Codex alternate short turns,
+    reacting to each other, until convergence or max turns.
+
+    Each turn:
+      - the active agent sees the full transcript including the other's last turn
+      - response is capped at DIALOGUE_TURN_WORDS for conversational pace
+      - response is checked for the CONVERGED marker → if so, stop
+
+    Status semantics during dialogue:
+      status='dialogue', turn=N (current turn about to run), max_turns=M,
+      current_agent='claude'|'codex', claude_done/codex_done track the latest pair.
+    """
+    log(f"dialogue start topic={topic} max_turns={max_turns} words/turn={DIALOGUE_TURN_WORDS}")
+
+    converged = False
+    last_turn = 0
+    for turn_n in range(1, max_turns + 1):
+        agent = _alternating_agent(turn_n)
+        other = OTHER[agent]
+        last_turn = turn_n
+
+        # Mark this turn in-flight under the state lock.
+        update_state(topic, {
+            "status": "dialogue",
+            "turn": turn_n,
+            "max_turns": max_turns,
+            "current_agent": agent,
+            # Use *_done as: True iff that agent has spoken at least once
+            # in this iteration. Lets the UI show different placeholders.
+            "claude_done": turn_n > 1 or agent == "codex",
+            "codex_done": turn_n > 1 and agent != "codex" or False,
+            "last_error": None,
+        })
+
+        msgs = read_transcript(topic)
+        transcript = format_transcript(msgs)
+
+        if turn_n == 1:
+            prompt = DIALOGUE_OPENING_PROMPT.format(
+                other_agent=other,
+                full_transcript=transcript,
+                turn_words=DIALOGUE_TURN_WORDS,
+            )
+        else:
+            prompt = DIALOGUE_TURN_PROMPT.format(
+                other_agent=other,
+                turn_n=turn_n,
+                max_turns=max_turns,
+                full_transcript=transcript,
+                turn_words=DIALOGUE_TURN_WORDS,
+            )
+
+        try:
+            _, ok, err = await run_agent(agent, topic, prompt_id, turn_n, cwd, prompt)
+        except BaseException as e:
+            log(f"dialogue turn {turn_n} ({agent}) raised: {e!r}")
+            append_system_message(
+                topic,
+                f"Orchestrator error in dialogue turn {turn_n} ({agent}): {e!r}",
+                prompt_id=prompt_id,
+                round_n=turn_n,
+            )
+            return False
+
+        if not ok:
+            append_system_message(topic, err, prompt_id=prompt_id, round_n=turn_n)
+            return False
+
+        # Re-read transcript to inspect what was just appended.
+        latest = read_transcript(topic)
+        last_msg = latest[-1] if latest else None
+        if last_msg and _has_converged(last_msg.get("content", "")):
+            log(f"dialogue converged at turn {turn_n} ({agent})")
+            converged = True
+            append_system_message(
+                topic,
+                f"converged at turn {turn_n} ({agent})",
+                prompt_id=prompt_id,
+                round_n=turn_n,
+            )
+            break
+
+    if not converged and last_turn == max_turns:
+        append_system_message(
+            topic,
+            f"reached max_turns={max_turns} without explicit convergence",
+            prompt_id=prompt_id,
+            round_n=last_turn,
+        )
+
+    return True
+
+
 async def run_round(
     topic: str,
     prompt_id: str,
@@ -357,32 +522,48 @@ async def run_round(
     return all_ok
 
 
-async def main_async(topic: str, prompt_id: str) -> int:
+async def main_async(topic: str, prompt_id: str, mode: str = "dialogue") -> int:
     cwd = resolve_workspace(topic)
-    log(f"start topic={topic} prompt_id={prompt_id} cwd={cwd} pid={os.getpid()}")
+    log(f"start topic={topic} prompt_id={prompt_id} mode={mode} cwd={cwd} pid={os.getpid()}")
 
-    # Sanity-check: state file should already say round-1 with our prompt_id.
     state_path, _, _ = state_paths(topic)
     state = _read_state_unlocked(state_path)
     if state.get("prompt_id") != prompt_id:
         log(f"WARN state prompt_id={state.get('prompt_id')!r} != ours={prompt_id!r}; continuing anyway")
 
-    # --- Round 1 ---
+    final_idle = {
+        "status": "idle",
+        "prompt_id": None,
+        "started_at": None,
+        "orchestrator_pid": None,
+        "claude_done": False,
+        "codex_done": False,
+        "turn": None,
+        "max_turns": None,
+        "current_agent": None,
+        "last_error": None,
+    }
+
+    if mode == "dialogue":
+        try:
+            ok = await run_dialogue(topic, prompt_id, cwd)
+        except BaseException as e:
+            log(f"dialogue raised: {e!r}")
+            append_system_message(topic, f"Dialogue orchestrator crashed: {e!r}", prompt_id=prompt_id)
+            ok = False
+        final_idle["last_error"] = None if ok else "dialogue had failures"
+        update_state(topic, final_idle)
+        log(f"dialogue done (ok={ok}); state=idle")
+        return 0 if ok else 1
+
+    # --- mode == 'rounds' (legacy R1/R2) ---
     r1_ok = await run_round(topic, prompt_id, 1, cwd)
     if not r1_ok:
         log("R1 had failures; skipping R2 and going idle")
-        update_state(topic, {
-            "status": "idle",
-            "prompt_id": None,
-            "started_at": None,
-            "orchestrator_pid": None,
-            "claude_done": False,
-            "codex_done": False,
-            "last_error": "one or more agents failed during R1",
-        })
+        final_idle["last_error"] = "one or more agents failed during R1"
+        update_state(topic, final_idle)
         return 1
 
-    # Transition R1 -> R2 atomically.
     update_state(topic, {
         "status": "round-2",
         "claude_done": False,
@@ -391,33 +572,23 @@ async def main_async(topic: str, prompt_id: str) -> int:
     })
     log("transitioned to round-2")
 
-    # --- Round 2 ---
     r2_ok = await run_round(topic, prompt_id, 2, cwd)
-
-    # Always finish in idle, regardless of R2 outcome. Partial responses are
-    # still in JSONL; Costa decides what to do next.
-    final_error = None if r2_ok else "one or more agents failed during R2"
-    update_state(topic, {
-        "status": "idle",
-        "prompt_id": None,
-        "started_at": None,
-        "orchestrator_pid": None,
-        "claude_done": False,
-        "codex_done": False,
-        "last_error": final_error,
-    })
+    final_idle["last_error"] = None if r2_ok else "one or more agents failed during R2"
+    update_state(topic, final_idle)
     log(f"done (R2 ok={r2_ok}); state=idle")
     return 0 if r2_ok else 1
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Team Room v2 orchestrator")
+    ap = argparse.ArgumentParser(description="Team Room orchestrator")
     ap.add_argument("--topic", required=True)
     ap.add_argument("--prompt-id", required=True)
+    ap.add_argument("--mode", default="dialogue", choices=["dialogue", "rounds"],
+                    help="dialogue=live micro-turn (default); rounds=legacy R1/R2 structured")
     args = ap.parse_args()
 
     try:
-        return asyncio.run(main_async(args.topic, args.prompt_id))
+        return asyncio.run(main_async(args.topic, args.prompt_id, args.mode))
     except KeyboardInterrupt:
         log("interrupted; marking state idle")
         update_state(args.topic, {

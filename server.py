@@ -58,6 +58,10 @@ def _default_state() -> dict:
         "orchestrator_pid": None,
         "claude_done": False,
         "codex_done": False,
+        "mode": None,
+        "turn": None,
+        "max_turns": None,
+        "current_agent": None,
         "last_error": None,
     }
 
@@ -161,7 +165,7 @@ def _append_jsonl(topic_jsonl: Path, role: str, model: str, content: str,
     subprocess.run(cmd, check=True)
 
 
-def _spawn_orchestrator(topic: str, prompt_id: str, log_path: Path) -> int | None:
+def _spawn_orchestrator(topic: str, prompt_id: str, log_path: Path, mode: str = "dialogue") -> int | None:
     """Spawn orchestrate.py detached. Returns the child PID, or None if the
     orchestrator script isn't available (test/dev fallback)."""
     orch = _find_repo_file("orchestrate.py")
@@ -171,7 +175,7 @@ def _spawn_orchestrator(topic: str, prompt_id: str, log_path: Path) -> int | Non
     log_fh = open(log_path, "a", encoding="utf-8")
     try:
         proc = subprocess.Popen(
-            [sys.executable, str(orch), "--topic", topic, "--prompt-id", prompt_id],
+            [sys.executable, str(orch), "--topic", topic, "--prompt-id", prompt_id, "--mode", mode],
             stdin=subprocess.DEVNULL,
             stdout=log_fh,
             stderr=subprocess.STDOUT,
@@ -180,7 +184,6 @@ def _spawn_orchestrator(topic: str, prompt_id: str, log_path: Path) -> int | Non
             cwd=str(ROOM_DIR),
         )
     finally:
-        # Popen dup'd the fd; we can close ours.
         log_fh.close()
     return proc.pid
 
@@ -644,6 +647,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         topic = (data.get("topic") or "").strip()
         content = data.get("content")
         workspace = data.get("workspace")
+        mode = data.get("mode") or "dialogue"
 
         if not topic or not TOPIC_NAME_RE.match(topic):
             return self._send_json(400, {"error": "invalid topic name"})
@@ -651,6 +655,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self._send_json(400, {"error": "content required"})
         if workspace is not None and not isinstance(workspace, str):
             return self._send_json(400, {"error": "workspace must be a string"})
+        if mode not in ("dialogue", "rounds"):
+            return self._send_json(400, {"error": "mode must be 'dialogue' or 'rounds'"})
 
         state_json, state_lock, topic_jsonl = _state_paths(topic)
         workspace_json = ROOM_DIR / f"{topic}.workspace.json"
@@ -729,7 +735,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
                 # Spawn the orchestrator detached. Capture PID immediately.
                 try:
-                    pid = _spawn_orchestrator(topic, prompt_id, log_path)
+                    pid = _spawn_orchestrator(topic, prompt_id, log_path, mode=mode)
                 except OSError as e:
                     return self._send_json(
                         500, {"error": f"could not spawn orchestrator: {e}"}
@@ -755,16 +761,23 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                         payload["recovered_from_crash"] = True
                     return self._send_json(202, payload)
 
-                # Persist the round-1 state atomically.
-                new_state = {
-                    "status": "round-1",
+                # Persist the initial state atomically. Dialogue and rounds
+                # modes use different status values so the UI can render
+                # appropriate placeholders / progress affordances.
+                new_state: dict = {
+                    "status": "dialogue" if mode == "dialogue" else "round-1",
                     "prompt_id": prompt_id,
                     "started_at": _now_utc_iso(),
                     "orchestrator_pid": pid,
                     "claude_done": False,
                     "codex_done": False,
+                    "mode": mode,
                     "last_error": None,
                 }
+                if mode == "dialogue":
+                    new_state["turn"] = 1
+                    new_state["max_turns"] = 8
+                    new_state["current_agent"] = "claude"
                 try:
                     _atomic_write_state(state_json, new_state)
                 except OSError as e:

@@ -75,12 +75,23 @@ export function TopicView({ topic, project }: Props) {
 
   const groups = useMemo(() => groupByPromptId(messages), [messages]);
 
-  const isBusy = status.status === 'round-1' || status.status === 'round-2';
-  const lockReason = isBusy
-    ? status.status === 'round-1'
-      ? 'Both agents thinking…'
-      : 'Agents reading each other…'
-    : undefined;
+  const isBusy =
+    status.status === 'round-1' ||
+    status.status === 'round-2' ||
+    status.status === 'dialogue';
+  const lockReason = (() => {
+    if (!isBusy) return undefined;
+    if (status.status === 'dialogue') {
+      const who = status.current_agent
+        ? status.current_agent[0].toUpperCase() + status.current_agent.slice(1)
+        : 'Agent';
+      const turn = status.turn ?? 1;
+      const max = status.max_turns ?? 8;
+      return `Live · Turn ${turn}/${max} · ${who} thinking…`;
+    }
+    if (status.status === 'round-1') return 'Both agents thinking…';
+    return 'Agents reading each other…';
+  })();
 
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col bg-[var(--color-bg)]">
@@ -168,6 +179,16 @@ function IterationGroup({
 }
 
 function InFlightSkeletons({ status }: { status: TopicStatus }) {
+  // Live dialogue mode: only the current_agent is thinking. The other is
+  // waiting their turn. Show a single skeleton so it reads as one continuous
+  // back-and-forth, not parallel essays.
+  if (status.status === 'dialogue') {
+    const who = status.current_agent;
+    if (!who) return null;
+    return <ThinkingBubble role={who} />;
+  }
+  // Legacy rounds mode: pair of skeletons, one disappears when its agent
+  // is done in the current round.
   const skeletons: Array<'claude' | 'codex'> = [];
   if (!status.claude_done) skeletons.push('claude');
   if (!status.codex_done) skeletons.push('codex');

@@ -30,12 +30,16 @@ export interface Topic {
 }
 
 export interface TopicStatus {
-  status: 'idle' | 'round-1' | 'round-2' | 'crashed';
+  status: 'idle' | 'round-1' | 'round-2' | 'dialogue' | 'crashed';
   prompt_id: string | null;
   started_at: string | null;
   orchestrator_pid: number | null;
   claude_done: boolean;
   codex_done: boolean;
+  mode?: 'dialogue' | 'rounds' | null;
+  turn?: number | null;
+  max_turns?: number | null;
+  current_agent?: 'claude' | 'codex' | null;
   last_error: string | null;
 }
 
